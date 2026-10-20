@@ -64,7 +64,7 @@ jobs:
       # Proof the setup was built here from this commit: `gh attestation verify <setup> -R <repo>`.
       - name: Build provenance
         id: attest
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest@v4
         with:
           subject-path: target/release/bundle/nsis/Guarden_${{ steps.v.outputs.version }}_x64-setup.exe
 
