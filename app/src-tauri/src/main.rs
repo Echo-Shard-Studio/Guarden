@@ -4,42 +4,41 @@
 
 fn main() {
     let app = tauri::Builder::default().plugin(tauri_plugin_updater::Builder::new().build());
-    #[cfg(windows)]
     let app = app.setup(|_| {
         // After an update the launchers still run the previous shim copy: swap it for the new one.
         if let Ok(exe) = std::env::current_exe() {
-            let _ = guarden::refresh_shim(&exe.with_file_name("guarden-shim.exe"));
+            let _ = guarden::update_shims(&exe.with_file_name(format!("guarden-shim{}", std::env::consts::EXE_SUFFIX)), false);
         }
         Ok(())
     });
-    #[cfg(windows)]
     let app = app.invoke_handler(tauri::generate_handler![
         cmd::get_state,
         cmd::check_update,
         cmd::install_update,
         cmd::set_protection,
         cmd::finish_setup,
+        cmd::separate,
         cmd::set_diagnostic,
         cmd::open_folder,
         cmd::uninstall
     ]);
-    // ponytail: Windows-only for now; on Linux the window opens but every command is missing.
     app.run(tauri::generate_context!()).expect("error while running Guarden");
 }
 
 /// The frontend's commands. All async: sync commands run on the window thread and would freeze the UI.
-#[cfg(windows)]
 mod cmd {
-    use guarden::{modrinth, sandbox};
+    use guarden::{Issue, Launcher as _, sys};
     use serde::Serialize;
     use std::collections::HashMap;
     use std::path::PathBuf;
 
     #[derive(Serialize)]
     pub struct Instance {
+        key: String,
         name: String,
         version: String,
-        /// "ok", "incomplete" (no localhost exemption yet) or "failed" (last launch exited non-zero)
+        /// "ok", "incomplete" (no localhost exemption yet), "failed" (last launch exited non-zero),
+        /// "bypass" (launches without Guarden) or "shared" (needs its own folder first)
         state: &'static str,
         code: Option<u32>,
         container: String,
@@ -51,6 +50,8 @@ mod cmd {
         name: &'static str,
         mono: &'static str,
         supported: bool,
+        /// Switching it on asks for admin (the UAC prompt).
+        admin: bool,
         on: bool,
         running: bool,
         instances: Vec<Instance>,
@@ -75,13 +76,26 @@ mod cmd {
     }
 
     /// "Minecraft 1.20.1 · Forge"
-    fn version(i: &modrinth::Instance) -> String {
+    fn version(i: &guarden::Instance) -> String {
         let loader = match i.loader.as_deref() {
             None | Some("vanilla") => String::new(),
             Some("neoforge") => " · NeoForge".into(),
             Some(l) => format!(" · {}{}", l[..1].to_uppercase(), &l[1..]),
         };
-        format!("Minecraft {}{loader}", i.game_version.as_deref().unwrap_or("?"))
+        match i.game_version.as_deref() {
+            Some(v) => format!("Minecraft {v}{loader}"),
+            None if loader.is_empty() => "Minecraft".into(),
+            None => loader[" · ".len()..].into(),
+        }
+    }
+
+    fn mono(id: &str) -> &'static str {
+        match id {
+            "modrinth" => "Mo",
+            "prism" => "Pr",
+            "curseforge" => "Cf",
+            _ => "Mc",
+        }
     }
 
     #[tauri::command]
@@ -89,8 +103,8 @@ mod cmd {
         let launches = guarden::launches();
         let mut names = HashMap::new();
         let mut launchers = vec![];
-        if modrinth::installed() {
-            let st = modrinth::status().map_err(|e| e.to_string())?;
+        for l in guarden::launchers().into_iter().filter(|l| l.installed()) {
+            let st = l.status().map_err(|e| format!("{} : {e}", l.name()))?;
             let instances = st
                 .instances
                 .iter()
@@ -98,35 +112,27 @@ mod cmd {
                     let container = guarden::container_name(&i.game_dir);
                     names.insert(container.clone(), i.name.clone());
                     let code = launches.iter().rev().find(|l| l.container == container).and_then(|l| l.code);
-                    let state = match code {
-                        _ if !sandbox::has_localhost(&container) => "incomplete",
-                        Some(c) if c != 0 => "failed",
+                    let state = match (i.issue, code) {
+                        (Some(Issue::Shared), _) => "shared",
+                        (Some(Issue::Bypass), _) => "bypass",
+                        _ if l.localhost() && !sys::has_localhost(&container) => "incomplete",
+                        (_, Some(c)) if c != 0 => "failed",
                         _ => "ok",
                     };
-                    Instance { name: i.name.clone(), version: version(i), state, code, container }
+                    Instance { key: i.key.clone(), name: i.name.clone(), version: version(i), state, code, container }
                 })
                 .collect();
             launchers.push(Launcher {
-                id: "modrinth",
-                name: "Modrinth App",
-                mono: "Mo",
+                id: l.id(),
+                name: l.name(),
+                mono: mono(l.id()),
                 supported: true,
+                admin: l.localhost(),
                 on: st.protected,
-                running: modrinth::is_running(),
+                running: l.is_running(),
                 instances,
                 count: None,
             });
-        }
-        // Detected, not supported yet: shown so people know they're coming.
-        let appdata = PathBuf::from(std::env::var_os("APPDATA").unwrap_or_default());
-        for (id, name, mono, dir) in [
-            ("prism", "Prism Launcher", "Pr", appdata.join("PrismLauncher").join("instances")),
-            ("official", "Launcher officiel", "Mc", appdata.join(".minecraft")),
-        ] {
-            if let Ok(entries) = std::fs::read_dir(&dir) {
-                let count = (id == "prism").then(|| entries.flatten().filter(|e| e.path().is_dir()).count());
-                launchers.push(Launcher { id, name, mono, supported: false, on: false, running: false, instances: vec![], count });
-            }
         }
         let recent = launches
             .iter()
@@ -160,33 +166,54 @@ mod cmd {
     /// Rerun the `guarden` CLI (installed next to the app) as admin. Errors are shown as-is, except
     /// "cancelled" when the UAC prompt was declined.
     fn elevated(args: &str) -> Result<(), String> {
-        let cli = std::env::current_exe().map_err(|e| e.to_string())?.with_file_name("guarden.exe");
-        match sandbox::run_elevated(&cli, args) {
+        match sys::run_elevated(&exe("guarden")?, args) {
             Ok(0) => Ok(()),
             Ok(_) => Err("Guarden n’a pas pu terminer. Réessaie, et active le mode diagnostic si ça recommence.".into()),
             Err(_) => Err("cancelled".into()),
         }
     }
 
-    fn supported(id: &str) -> Result<(), String> {
-        if id == "modrinth" { Ok(()) } else { Err("Ce launcher n’est pas encore pris en charge.".into()) }
+    /// A file shipped next to the app.
+    fn exe(name: &str) -> Result<PathBuf, String> {
+        Ok(std::env::current_exe().map_err(|e| e.to_string())?.with_file_name(format!("{name}{}", std::env::consts::EXE_SUFFIX)))
+    }
+
+    fn launcher(id: &str) -> Result<&'static dyn guarden::Launcher, String> {
+        guarden::launcher(id).ok_or("Ce launcher n’est pas encore pris en charge.".into())
     }
 
     /// "running" when the launcher is open: it would overwrite its own settings over ours.
+    /// Switching on again also picks up instances created since (`bypass`).
     #[tauri::command]
     pub async fn set_protection(id: String, on: bool) -> Result<(), String> {
-        supported(&id)?;
-        if modrinth::is_running() {
+        let l = launcher(&id)?;
+        if l.is_running() {
             return Err("running".into());
         }
-        if on { elevated("protect modrinth") } else { modrinth::restore().map_err(|e| e.to_string()) }
+        if !on {
+            return l.restore().map_err(|e| e.to_string());
+        }
+        if l.localhost() {
+            return elevated(&format!("protect {id}"));
+        }
+        guarden::update_shims(&exe("guarden-shim")?, true).map_err(|e| e.to_string())?;
+        l.protect().map(drop).map_err(|e| e.to_string())
     }
 
     /// Give new instances their container and localhost access. Works with the launcher open.
     #[tauri::command]
     pub async fn finish_setup(id: String) -> Result<(), String> {
-        supported(&id)?;
-        elevated("prepare modrinth")
+        launcher(&id)?;
+        elevated(&format!("prepare {id}"))
+    }
+
+    /// Give a vanilla installation sharing `.minecraft` its own folder (see `vanilla::separate`).
+    #[tauri::command]
+    pub async fn separate(key: String) -> Result<(), String> {
+        if guarden::vanilla::Vanilla.is_running() {
+            return Err("running".into());
+        }
+        guarden::vanilla::separate(&key).map(drop).map_err(|e| e.to_string())
     }
 
     #[tauri::command]
@@ -198,18 +225,16 @@ mod cmd {
 
     #[tauri::command]
     pub async fn open_folder() -> Result<(), String> {
-        std::process::Command::new("explorer").arg(guarden::root()).spawn().map(|_| ()).map_err(|e| e.to_string())
+        sys::open(&guarden::root()).map_err(|e| e.to_string())
     }
 
     /// Restore every launcher. ponytail: ACEs and containers stay until Restore records its grants.
     #[tauri::command]
     pub async fn uninstall() -> Result<(), String> {
-        if modrinth::installed() {
-            if modrinth::is_running() {
-                return Err("running".into());
-            }
-            modrinth::restore().map_err(|e| e.to_string())?;
+        let installed = guarden::launchers().into_iter().filter(|l| l.installed());
+        if installed.clone().any(|l| l.is_running()) {
+            return Err("running".into());
         }
-        Ok(())
+        installed.into_iter().try_for_each(|l| l.restore()).map_err(|e| e.to_string())
     }
 }

@@ -297,14 +297,24 @@ const example = () => {
     diagnostic: false,
     version: '0.1.0',
     launchers: [
-      { id: 'modrinth', name: 'Modrinth App', mono: 'Mo', supported: true, on: true, running: false, instances: [
-        { name: 'Fabric 26.3', version: 'Minecraft 26.3 · Fabric', state: 'ok', code: 0, container: 'Guarden.56e114b99b3511f6' },
-        { name: 'Vanilla 1.21.4', version: 'Minecraft 1.21.4', state: 'ok', code: 0, container: 'Guarden.7d1e0b9a55c2f318' },
-        { name: 'Create 1.20.1', version: 'Minecraft 1.20.1 · Forge', state: 'incomplete', code: null, container: 'Guarden.0b1c2d3e4f506172' },
-        { name: 'Vanilla 1.8.9', version: 'Minecraft 1.8.9', state: 'failed', code: 1, container: 'Guarden.a3f09c21d4e8b7f0' },
+      { id: 'modrinth', name: 'Modrinth App', mono: 'Mo', supported: true, admin: true, on: true, running: false, instances: [
+        { key: 'fabric', name: 'Fabric 26.3', version: 'Minecraft 26.3 · Fabric', state: 'ok', code: 0, container: 'Guarden.56e114b99b3511f6' },
+        { key: 'vanilla', name: 'Vanilla 1.21.4', version: 'Minecraft 1.21.4', state: 'ok', code: 0, container: 'Guarden.7d1e0b9a55c2f318' },
+        { key: 'create', name: 'Create 1.20.1', version: 'Minecraft 1.20.1 · Forge', state: 'incomplete', code: null, container: 'Guarden.0b1c2d3e4f506172' },
+        { key: 'old', name: 'Vanilla 1.8.9', version: 'Minecraft 1.8.9', state: 'failed', code: 1, container: 'Guarden.a3f09c21d4e8b7f0' },
       ] },
-      { id: 'prism', name: 'Prism Launcher', mono: 'Pr', supported: false, instances: [], count: 2 },
-      { id: 'official', name: 'Launcher officiel', mono: 'Mc', supported: false, instances: [], count: null },
+      { id: 'prism', name: 'Prism Launcher', mono: 'Pr', supported: true, admin: false, on: false, running: false, instances: [
+        { key: 'skyblock', name: 'Skyblock', version: 'Minecraft 1.21.1 · NeoForge', state: 'ok', code: null, container: 'Guarden.1f2e3d4c5b6a7980' },
+        { key: 'litematica', name: 'Litematica', version: 'Minecraft 1.21.4 · Fabric', state: 'ok', code: null, container: 'Guarden.9a8b7c6d5e4f3021' },
+      ] },
+      { id: 'official', name: 'Launcher officiel', mono: 'Mc', supported: true, admin: false, on: true, running: false, instances: [
+        { key: 'a1b2', name: 'Fabric', version: 'Minecraft 1.21.4 · Fabric', state: 'shared', code: null, container: 'Guarden.5566778899aabbcc' },
+        { key: 'c3d4', name: 'Optifine', version: 'Minecraft 1.20.1', state: 'bypass', code: null, container: 'Guarden.ddeeff0011223344' },
+        { key: 'e5f6', name: 'Dernière version', version: 'Minecraft', state: 'shared', code: null, container: 'Guarden.0102030405060708' },
+      ] },
+      { id: 'curseforge', name: 'CurseForge', mono: 'Cf', supported: true, admin: false, on: false, running: false, instances: [
+        { key: 'atm', name: 'All the Mods 10', version: 'Minecraft 1.21.1 · NeoForge', state: 'ok', code: null, container: 'Guarden.13579bdf02468ace' },
+      ] },
     ],
     recent: [
       { ts: now - 1 * H, name: 'Fabric 26.3', minutes: 42, code: 0 },
@@ -323,7 +333,9 @@ const fake = {
     const l = this.data.launchers.find(x => x.id === id);
     if (l.running) throw 'running';
     l.on = on;
+    if (on) for (const i of l.instances) if (i.state === 'bypass') i.state = 'ok';
   },
+  async separate({ key }) { for (const l of this.data.launchers) for (const i of l.instances) if (i.key === key) i.state = 'ok'; },
   async finish_setup({ id }) { for (const i of this.data.launchers.find(x => x.id === id).instances) if (i.state === 'incomplete') i.state = 'ok'; },
   async set_diagnostic({ on }) { this.data.diagnostic = on; },
   async open_folder() {},
@@ -350,6 +362,8 @@ const STATE = {
   incomplete: ['warn', 'Configuration incomplète'],
   failed: ['bad', 'N’a pas démarré'],
   off: ['warn', 'Non protégée'],
+  bypass: ['warn', 'Pas encore protégée'],
+  shared: ['warn', 'Dossier partagé'],
 };
 
 function when(ts) {
@@ -386,7 +400,7 @@ async function refresh() {
 
 function render() {
   const on = supported().filter(l => l.on);
-  const sheltered = on.reduce((n, l) => n + l.instances.length, 0);
+  const sheltered = on.reduce((n, l) => n + l.instances.filter(i => i.state !== 'bypass' && i.state !== 'shared').length, 0);
   $('stage').dataset.on = on.length > 0;
   $('headline').textContent = on.length ? 'Tes parties sont à l’abri.' : 'Tes parties ne sont pas protégées.';
   $('lede').textContent = on.length
@@ -404,11 +418,20 @@ function render() {
   if (update) notes.push({ info: true, title: `Guarden ${update} est disponible`, text: 'La mise à jour s’installe en quelques secondes, Windows te demandera l’autorisation.', btn: 'Mettre à jour', act: 'update' });
   if (error) notes.push({ bad: true, title: 'Guarden n’arrive pas à lire l’état de tes launchers', text: error, btn: 'Réessayer', act: 'refresh' });
   for (const l of supported()) {
-    if (l.running) notes.push({ title: `${l.name} est ouvert`, text: 'Ferme-le afin que Guarden s’exécute correctement.', btn: 'Réessayer', act: 'refresh' });
+    if (l.running) notes.push({ title: `${l.name} est ouvert`, btn: 'Réessayer', act: 'refresh',
+      text: l.id === 'curseforge' ? 'Quitte-le, aussi depuis son icône près de l’horloge, afin que Guarden s’exécute correctement.' : 'Ferme-le afin que Guarden s’exécute correctement.' });
     const todo = l.on ? l.instances.filter(i => i.state === 'incomplete') : [];
     if (todo.length) notes.push({
       title: todo.length === 1 ? `Configuration incomplète pour ${todo[0].name}` : `Configuration incomplète pour ${todo.length} instances`,
       text: 'Les logs ne pourront pas s’afficher dans le launcher.', btn: 'Terminer', act: `finish:${l.id}` });
+    const fresh = l.on ? l.instances.filter(i => i.state === 'bypass') : [];
+    if (fresh.length) notes.push({
+      title: fresh.length === 1 ? `${fresh[0].name} n’est pas encore protégée` : `${fresh.length} instances ne sont pas encore protégées`,
+      text: fresh.length === 1 ? 'Elle se lance encore sans Guarden.' : 'Elles se lancent encore sans Guarden.', btn: 'Protéger', act: `protect:${l.id}` });
+    // Vanilla installs left on the shared folder: only the modded ones are worth a note.
+    for (const i of l.on ? l.instances.filter(i => i.state === 'shared' && i.version.includes('·')) : []) notes.push({
+      title: `${i.name} utilise le dossier principal du jeu`,
+      text: 'Sépare-la pour la protéger : ses mods et tes mondes sont copiés dans son propre dossier.', btn: 'Séparer', act: `separate:${i.key}` });
   }
   $('notes').innerHTML = notes.map(n => `
     <div class="note${n.bad ? ' bad' : n.info ? ' info' : ''}"><span class="glyph" aria-hidden="true"></span>
@@ -436,9 +459,12 @@ function render() {
     $('inst-sub').textContent = l.on ? 'Chacune dans sa bulle.' : 'Pas encore protégées.';
     $('instances').innerHTML = l.instances.length ? l.instances.map(i => {
       const [cls, label] = STATE[l.on ? i.state : 'off'];
-      const act = !l.on ? '' : i.state === 'incomplete'
-        ? `<button class="btn" type="button" data-act="finish:${l.id}">Terminer</button>`
-        : i.state === 'failed' ? `<button class="btn quiet" type="button" data-why="${esc(i.name)}">Voir pourquoi</button>` : '';
+      const act = !l.on ? '' : {
+        incomplete: `<button class="btn" type="button" data-act="finish:${l.id}">Terminer</button>`,
+        bypass: `<button class="btn" type="button" data-act="protect:${l.id}">Protéger</button>`,
+        shared: `<button class="btn" type="button" data-act="separate:${esc(i.key)}">Séparer</button>`,
+        failed: `<button class="btn quiet" type="button" data-why="${esc(i.name)}">Voir pourquoi</button>`,
+      }[i.state] ?? '';
       return `<div class="item"><div class="what"><b>${esc(i.name)}</b><span>${esc(i.version)}</span></div>
         <span class="state ${cls}"><i aria-hidden="true"></i>${label}</span><span class="act">${act}</span></div>`;
     }).join('') : `<p class="empty">Aucune instance pour l’instant. Crée-en une dans ${esc(l.name)}.</p>`;
@@ -496,7 +522,7 @@ async function toggle(id) {
   const l = s.launchers.find(x => x.id === id);
   if (busy) return;
   busy = id; render();
-  if (!l.on) toast('Windows va te demander l’autorisation.');
+  if (!l.on && l.admin) toast('Windows va te demander l’autorisation.');
   try {
     await call('set_protection', { id, on: !l.on });
     toast(l.on ? `Protection retirée de ${l.name}.` : `${l.name} est protégé.`);
@@ -520,10 +546,16 @@ document.addEventListener('click', e => {
   if (t.dataset.toggle) { e.stopPropagation(); return toggle(t.dataset.toggle); }
   if (t.dataset.select) { selected = t.dataset.select; return render(); }
   if (t.dataset.act) {
-    const [kind, id] = t.dataset.act.split(':');
+    const sep = t.dataset.act.indexOf(':');
+    const [kind, id] = sep < 0 ? [t.dataset.act, ''] : [t.dataset.act.slice(0, sep), t.dataset.act.slice(sep + 1)];
     if (kind === 'refresh') return refresh();
     if (kind === 'update') { toast('Téléchargement de la mise à jour…'); return act('install_update', {}); }
     if (kind === 'finish') { toast('Windows va te demander l’autorisation.'); return act('finish_setup', { id }, 'Configuration terminée.'); }
+    if (kind === 'protect') {
+      if (s.launchers.find(x => x.id === id)?.admin) toast('Windows va te demander l’autorisation.');
+      return act('set_protection', { id, on: true }, 'C’est protégé.');
+    }
+    if (kind === 'separate') { toast('Copie de tes fichiers…'); return act('separate', { key: id }, 'Elle a maintenant son propre dossier.'); }
   }
   if (t.dataset.why) return why(t.dataset.why);
   switch (t.id) {

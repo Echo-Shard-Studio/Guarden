@@ -22,14 +22,23 @@ pub fn from_args(args: &[String], java_home: &Path, deny: &[PathBuf]) -> Result<
         let agent = a.strip_prefix("-javaagent:").map(|v| v.split('=').next().unwrap_or(v));
         let after_eq = a.split_once('=').map(|(_, v)| v);
         // ponytail: `@argfile` contents aren't parsed; add if a launcher turns out to use them.
-        for piece in [Some(a.as_str()), agent, after_eq].into_iter().flatten().flat_map(|v| v.split(';')) {
-            let path = Path::new(piece);
+        // split_paths: the classpath separator, `;` on Windows, `:` elsewhere.
+        for path in [Some(a.as_str()), agent, after_eq].into_iter().flatten().flat_map(std::env::split_paths) {
             if path.is_absolute() && path.exists() {
-                p.ro.push(path.into());
+                p.ro.push(path);
             }
         }
     }
     p.ro.push(java_home.into());
+    // ForgeWrapper (Forge/NeoForge in Prism) finds the loader's installer from its own jar, in the
+    // libraries dir: read the whole dir (public jars), instead of each.
+    // ponytail: a loader's first launch writes its patched jars there, refused; the second sandboxed
+    // launch fails until one ran unprotected. Grant it then, if the shared dir is worth the risk.
+    let forge_wrapper = p.ro.iter().find(|r| r.file_name().is_some_and(|n| n.to_string_lossy().starts_with("ForgeWrapper")));
+    if let Some(lib) = forge_wrapper.and_then(|f| f.ancestors().find(|a| a.ends_with("libraries"))).map(Path::to_path_buf) {
+        p.ro.retain(|r| !r.starts_with(&lib));
+        p.ro.push(lib);
+    }
     p.ro.retain(|r| !p.rw.iter().any(|w| r.starts_with(w)));
     p.ro.sort();
     p.ro.dedup();
@@ -95,7 +104,7 @@ mod tests {
         let args = vec![
             format!("-Djava.library.path={}", s(&natives)),
             "-cp".into(),
-            format!("{};{}", s(&a), s(&b)),
+            std::env::join_paths([&a, &b]).unwrap().into_string().unwrap(),
             "net.minecraft.client.main.Main".into(),
             "--gameDir".into(),
             s(&game),
@@ -114,6 +123,12 @@ mod tests {
         let mut r = vec!["-Djna.tmpdir=X:/shared/jna".to_string(), "-Xmx1G".into()];
         redirect_extract_dirs(&mut r, Path::new("T"));
         assert_eq!(r, ["-Djna.tmpdir=T", "-Xmx1G"]);
+
+        let fw = t.join("libraries").join("io").join("ForgeWrapper-1.jar");
+        fs::create_dir_all(fw.parent().unwrap()).unwrap();
+        fs::write(&fw, "").unwrap();
+        let p = from_args(&["-cp".into(), s(&fw)], &java, &deny).unwrap();
+        assert_eq!(p.ro, vec![java.clone(), t.join("libraries")]);
 
         // granting the parent of a denied dir must be refused
         let mut bad = args.clone();

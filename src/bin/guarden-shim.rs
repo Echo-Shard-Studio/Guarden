@@ -1,9 +1,8 @@
 //! Sandboxing java launcher, used two ways: as the launcher's wrapper hook (`guarden-shim <java> <args>`),
 //! or as a fake `java.exe` / `javaw.exe` in `%APPDATA%\Guarden\java\<id>\bin\` with `<id>\real.txt` holding
-//! the real JAVA_HOME. Either way it relaunches the real java inside an AppContainer.
+//! the real JAVA_HOME (or `auto`). Either way it relaunches the real java inside an AppContainer.
 #![windows_subsystem = "windows"]
 
-#[cfg(windows)]
 fn main() {
     std::panic::set_hook(Box::new(|info| log(&format!("panic: {info}")))); // GUI subsystem: panics are otherwise invisible
     std::process::exit(match run() {
@@ -20,9 +19,8 @@ fn main() {
     })
 }
 
-#[cfg(windows)]
 fn run() -> Result<(String, u32), Box<dyn std::error::Error>> {
-    use guarden::{policy, sandbox};
+    use guarden::{policy, sys};
     use std::path::{Path, PathBuf};
 
     let me = std::env::current_exe()?;
@@ -32,24 +30,36 @@ fn run() -> Result<(String, u32), Box<dyn std::error::Error>> {
         .collect::<Result<Vec<_>, _>>()?;
     let real_txt = me.parent().and_then(Path::parent).map(|d| d.join("real.txt"));
     let (exe, home) = match real_txt.and_then(|p| std::fs::read_to_string(p).ok()) {
-        // Fake java: `<id>\bin\java(w).exe`, the real JAVA_HOME is in `<id>\real.txt`.
+        // Fake java: `<id>\bin\java(w).exe`, the real JAVA_HOME is in `<id>\real.txt`,
+        // or `auto`: the Mojang runtime of the version being launched (official launcher).
         Some(home) => {
-            let home = PathBuf::from(home.trim());
+            let home = if home.trim() == "auto" { guarden::vanilla::runtime_for(&args)? } else { PathBuf::from(home.trim()) };
             (home.join("bin").join(me.file_name().ok_or("no exe name")?), home)
         }
         // Launcher wrapper hook (Modrinth): `guarden-shim <java> <args...>`.
         None => {
-            let exe = PathBuf::from(if args.is_empty() { return Err("usage: guarden-shim <java.exe> <args...>".into()) } else { args.remove(0) });
+            let exe = PathBuf::from(if args.is_empty() { return Err("usage: guarden-shim <java> <args...>".into()) } else { args.remove(0) });
             let name = exe.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
-            if name != "java.exe" && name != "javaw.exe" {
-                return Err(format!("{} is not java.exe/javaw.exe", exe.display()).into());
+            if !sys::JAVAS.contains(&name.as_str()) {
+                return Err(format!("{} is not {}", exe.display(), sys::JAVAS.join("/")).into());
             }
             let home = exe.parent().and_then(Path::parent).ok_or("java is not in <home>\\bin\\")?.to_path_buf();
             (exe, home)
         }
     };
 
-    let pol = policy::from_args(&args, &home, &guarden::deny_list())?;
+    // Prism sends the game args (--gameDir...) on stdin, not argv: read them before granting, then
+    // hand java the script as it came.
+    let (input, mut seen) = if args.iter().any(|a| a == "org.prismlauncher.EntryPoint") {
+        let (raw, params) = guarden::prism::read_script(&mut std::io::stdin().lock())?;
+        (Some(raw), [args.clone(), params].concat())
+    } else {
+        (None, args.clone())
+    };
+    if let Ok(cp) = std::env::var("CLASSPATH") {
+        seen.extend(["-cp".into(), cp]); // java reads it when there's no -cp (Prism on Linux)
+    }
+    let pol = policy::from_args(&seen, &home, &guarden::deny_list())?;
     // No gameDir = launcher probing java.
     let container = pol.rw.first().map_or("Guarden.probe".into(), |d| guarden::container_name(d));
     log(&format!("{container} {} rw={:?} ro={:?}", exe.display(), pol.rw, pol.ro));
@@ -66,11 +76,10 @@ fn run() -> Result<(String, u32), Box<dyn std::error::Error>> {
     } else {
         None
     };
-    let code = sandbox::run(&container, &exe, &args, &pol, output.as_ref())?;
+    let code = sys::run(&container, &exe, &args, &pol, output.as_ref(), input)?;
     Ok((container, code))
 }
 
-#[cfg(windows)]
 fn log(msg: &str) {
     use std::io::Write;
     let dir = guarden::root().join("logs");
@@ -79,9 +88,4 @@ fn log(msg: &str) {
         let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
         let _ = writeln!(f, "[{t}] {msg}");
     }
-}
-
-#[cfg(not(windows))]
-fn main() {
-    eprintln!("guarden-shim is Windows-only for now");
 }

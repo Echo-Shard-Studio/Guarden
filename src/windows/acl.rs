@@ -8,7 +8,8 @@ use windows::core::{HSTRING, PWSTR, Result};
 
 /// Grant `mask` on `path` to `sid`. With `inherit`, a directory's ACE inherits to everything below;
 /// without, only `path` itself changes and nothing below is walked.
-/// Does nothing if the access is already there, so repeat launches don't re-walk big trees.
+/// Does nothing if the access is already there, so repeat launches don't re-walk big trees, or if
+/// every container already has it (ALL APPLICATION PACKAGES: Program Files, where we can't write).
 pub fn grant(path: &Path, sid: PSID, mask: u32, inherit: bool) -> Result<()> {
     let name = HSTRING::from(path);
     let inherit = inherit && path.is_dir();
@@ -16,7 +17,8 @@ pub fn grant(path: &Path, sid: PSID, mask: u32, inherit: bool) -> Result<()> {
         let mut dacl: *mut ACL = null_mut();
         let mut sd = PSECURITY_DESCRIPTOR::default();
         GetNamedSecurityInfoW(&name, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, None, None, Some(&mut dacl), None, &mut sd).ok()?;
-        let r = if has_ace(dacl, sid, mask, inherit) {
+        // ponytail: the ALL APPLICATION PACKAGES check is on the object only, trusting children inherit it.
+        let r = if has_ace(dacl, sid, mask, inherit) || has_ace(dacl, all_app_packages(), mask, false) {
             Ok(())
         } else {
             let ea = EXPLICIT_ACCESS_W {
@@ -55,6 +57,13 @@ unsafe fn set_own_dacl(name: &HSTRING, old: PSECURITY_DESCRIPTOR, dacl: *const A
         SetSecurityDescriptorControl(p, keep, SECURITY_DESCRIPTOR_CONTROL(ctl) & keep)?;
         SetFileSecurityW(name, DACL_SECURITY_INFORMATION, p).ok()
     }
+}
+
+fn all_app_packages() -> PSID {
+    let mut p = PSID::default();
+    // S-1-15-2-1; leaked once per call, the shim is short-lived
+    let _ = unsafe { ConvertStringSidToSidW(&HSTRING::from("S-1-15-2-1"), &mut p) };
+    p
 }
 
 unsafe fn has_ace(acl: *const ACL, sid: PSID, mask: u32, dir: bool) -> bool {

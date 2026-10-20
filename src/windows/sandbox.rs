@@ -1,4 +1,5 @@
-use crate::{acl, policy, policy::Policy, push_arg};
+use super::{acl, push_arg};
+use crate::{policy, policy::Policy};
 use std::error::Error;
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStrExt;
@@ -126,7 +127,8 @@ fn container_temp(sid: PSID) -> R<PathBuf> {
 /// Run `exe args` inside the AppContainer `container`, with `pol` applied, and return its exit code.
 /// The child sits in a kill-on-close job: if the launcher kills us ("Stop"), java dies with us.
 /// `output`: send java's stdout/stderr there instead of to the launcher (debug).
-pub fn run(container: &str, exe: &Path, args: &[String], pol: &Policy, output: Option<&std::fs::File>) -> R<u32> {
+/// `input`: what we already read from our stdin; java gets it first, then the rest of our stdin.
+pub fn run(container: &str, exe: &Path, args: &[String], pol: &Policy, output: Option<&std::fs::File>, input: Option<Vec<u8>>) -> R<u32> {
     let sid = container_sid(container)?;
     for d in &pol.rw {
         acl::grant(d, sid, FILE_ALL_ACCESS.0, true)?;
@@ -161,6 +163,13 @@ pub fn run(container: &str, exe: &Path, args: &[String], pol: &Policy, output: O
         if let Some(f) = output {
             let h = HANDLE(std::os::windows::io::AsRawHandle::as_raw_handle(f));
             [std_h[1], std_h[2]] = [h, h];
+        }
+        let mut feed = None;
+        if let Some(head) = input {
+            let (mut r, mut w) = (HANDLE::default(), HANDLE::default());
+            windows::Win32::System::Pipes::CreatePipe(&mut r, &mut w, None, 0)?;
+            std_h[0] = r;
+            feed = Some((w.0 as usize, head)); // HANDLE isn't Send
         }
         let mut inherit: Vec<HANDLE> = std_h
             .into_iter()
@@ -240,6 +249,14 @@ pub fn run(container: &str, exe: &Path, args: &[String], pol: &Policy, output: O
             return Err(e.into());
         }
         ResumeThread(pi.hThread);
+        if let Some((w, head)) = feed {
+            std::thread::spawn(move || {
+                use std::io::Write;
+                use std::os::windows::io::FromRawHandle;
+                let mut pipe = std::fs::File::from_raw_handle(w as _);
+                let _ = pipe.write_all(&head).and_then(|_| std::io::copy(&mut std::io::stdin(), &mut pipe));
+            });
+        }
         WaitForSingleObject(pi.hProcess, INFINITE);
         let mut code = 0;
         GetExitCodeProcess(pi.hProcess, &mut code)?;

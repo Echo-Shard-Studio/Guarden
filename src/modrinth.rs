@@ -1,16 +1,19 @@
 //! Modrinth App: protect = point its wrapper hook at the shim, restore = clear it.
-//! Settings live in `%APPDATA%\ModrinthApp\app.db` (SQLite, `settings` row id 0).
+//! Settings live in `<data dir>/ModrinthApp/app.db` (SQLite, `settings` row id 0), also as a Flatpak.
+use crate::{Instance, Issue, R, Status};
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
-type R<T> = Result<T, Box<dyn std::error::Error>>;
+pub fn dir() -> PathBuf {
+    data().join("ModrinthApp")
+}
 
-fn dir() -> PathBuf {
-    crate::env_path("APPDATA").unwrap_or_default().join("ModrinthApp")
+fn data() -> PathBuf {
+    crate::launcher_data("ModrinthApp", "com.modrinth.ModrinthApp")
 }
 
 fn shim() -> PathBuf {
-    crate::installed_shim()
+    crate::shim_in(&data())
 }
 
 /// The hook as Modrinth stores it: it runs `shlex::split(hook)`, POSIX rules, so `\` would be eaten
@@ -19,24 +22,10 @@ fn hook() -> String {
     format!("'{}'", shim().to_string_lossy().replace('\'', r"'\''"))
 }
 
-pub fn installed() -> bool {
-    dir().join("app.db").exists()
-}
-
-/// Modrinth running? It keeps its settings in memory and would overwrite ours on its next save.
-// ponytail: process name check; a renamed Modrinth exe slips through.
-pub fn is_running() -> bool {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000; // called from the GUI: no console flash
-    std::process::Command::new("tasklist")
-        .args(["/FI", "IMAGENAME eq Modrinth App.exe", "/NH"])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("Modrinth App.exe"))
-}
+pub struct Modrinth;
 
 fn open() -> R<Connection> {
-    if is_running() {
+    if crate::Launcher::is_running(&Modrinth) {
         return Err("close Modrinth first, it would overwrite its settings".into());
     }
     let db = dir().join("app.db");
@@ -52,87 +41,84 @@ fn profiles(db: &Connection) -> R<PathBuf> {
     Ok(custom.filter(|c| !c.is_empty()).map(PathBuf::from).unwrap_or_else(dir).join("profiles"))
 }
 
-pub struct Instance {
-    pub name: String,
-    pub game_version: Option<String>,
-    pub loader: Option<String>,
-    /// What Modrinth passes as `--gameDir`, so `container_name(game_dir)` is the instance's container.
-    pub game_dir: PathBuf,
-}
-
-pub struct Status {
-    pub protected: bool,
-    pub instances: Vec<Instance>,
-}
-
-/// Read-only look at Modrinth, fine while it runs. Most recently played instances first.
-pub fn status() -> R<Status> {
-    let db = Connection::open_with_flags(dir().join("app.db"), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    let current: Option<String> = db.query_row("SELECT hook_wrapper FROM settings WHERE id = 0", [], |r| r.get(0))?;
-    let protected = current.is_some_and(|w| w == hook());
-    let profiles = profiles(&db)?;
+/// Instances with their own wrapper hook, which replaces ours.
+// ponytail: matches the overrides JSON as text; parse it once its format is known.
+fn own_wrapper(db: &Connection) -> R<Vec<String>> {
     let mut q = db.prepare(
-        "SELECT i.name, i.path, cs.game_version, cs.loader FROM instances i
-         LEFT JOIN instance_content_sets cs ON cs.id = i.applied_content_set_id
-         ORDER BY i.last_played DESC NULLS LAST, i.name",
-    )?;
-    let instances = q
-        .query_map([], |r| {
-            Ok(Instance { name: r.get(0)?, game_dir: profiles.join(r.get::<_, String>(1)?), game_version: r.get(2)?, loader: r.get(3)? })
-        })?
-        .collect::<Result<_, _>>()?;
-    Ok(Status { protected, instances })
-}
-
-/// Install the shim, set it as Modrinth's wrapper hook, and prepare a container per instance.
-/// Returns warnings: instances left unprotected or not prepared.
-pub fn protect(shim_src: &Path) -> R<Vec<String>> {
-    let db = open()?;
-    let shim = shim();
-    let current: Option<String> = db.query_row("SELECT hook_wrapper FROM settings WHERE id = 0", [], |r| r.get(0))?;
-    if let Some(w) = current.filter(|w| !w.is_empty() && *w != hook() && Path::new(w) != shim) {
-        return Err(format!("Modrinth already has a wrapper hook ({w}), Guarden won't replace it").into());
-    }
-    std::fs::create_dir_all(crate::root())?;
-    std::fs::copy(shim_src, &shim)?;
-    db.execute("UPDATE settings SET hook_wrapper = ?1 WHERE id = 0", [hook()])?;
-
-    let mut warn = vec![];
-    // ponytail: matches the overrides JSON as text; parse it once its format is known.
-    let mut q = db.prepare(
-        "SELECT i.name FROM instances i JOIN instance_launch_overrides o ON o.instance_id = i.id
+        "SELECT i.path FROM instances i JOIN instance_launch_overrides o ON o.instance_id = i.id
          WHERE CAST(o.overrides AS TEXT) LIKE '%wrapper%'",
     )?;
-    for name in q.query_map([], |r| r.get::<_, String>(0))? {
-        warn.push(format!("instance \"{}\" has its own wrapper hook: NOT protected", name?));
-    }
-
-    warn.extend(prepare()?);
-    Ok(warn)
+    Ok(q.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?)
 }
 
-/// Create each instance's container with its localhost exemption (admin). Doesn't touch Modrinth's
-/// settings, so it works while Modrinth is open: it's also how a new instance gets fixed.
-pub fn prepare() -> R<Vec<String>> {
-    let mut warn = vec![];
-    for i in status()?.instances {
-        let name = crate::container_name(&i.game_dir);
-        match crate::sandbox::prepare(&name) {
-            Ok(()) => println!("{name}  {}", i.game_dir.display()),
-            Err(e) => warn.push(format!("{}: {e}", i.game_dir.display())),
+impl crate::Launcher for Modrinth {
+    fn id(&self) -> &'static str {
+        "modrinth"
+    }
+    fn name(&self) -> &'static str {
+        "Modrinth App"
+    }
+    fn installed(&self) -> bool {
+        dir().join("app.db").exists()
+    }
+    fn is_running(&self) -> bool {
+        crate::sys::running(&["Modrinth App.exe", "modrinth-app-wrapped"])
+    }
+    fn localhost(&self) -> bool {
+        true // the live log in Modrinth comes over a localhost socket
+    }
+
+    /// Most recently played instances first.
+    fn status(&self) -> R<Status> {
+        let db = Connection::open_with_flags(dir().join("app.db"), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let current: Option<String> = db.query_row("SELECT hook_wrapper FROM settings WHERE id = 0", [], |r| r.get(0))?;
+        let protected = current.is_some_and(|w| w == hook());
+        let profiles = profiles(&db)?;
+        let own = own_wrapper(&db)?;
+        let mut q = db.prepare(
+            "SELECT i.name, i.path, cs.game_version, cs.loader FROM instances i
+             LEFT JOIN instance_content_sets cs ON cs.id = i.applied_content_set_id
+             ORDER BY i.last_played DESC NULLS LAST, i.name",
+        )?;
+        let instances = q
+            .query_map([], |r| {
+                let key: String = r.get(1)?;
+                Ok(Instance {
+                    name: r.get(0)?,
+                    game_dir: profiles.join(&key),
+                    game_version: r.get(2)?,
+                    loader: r.get(3)?,
+                    issue: own.contains(&key).then_some(Issue::Bypass),
+                    key,
+                })
+            })?
+            .collect::<Result<_, _>>()?;
+        Ok(Status { protected, instances })
+    }
+
+    /// Set the shim as Modrinth's wrapper hook and prepare a container per instance (admin).
+    fn protect(&self) -> R<Vec<String>> {
+        let db = open()?;
+        let current: Option<String> = db.query_row("SELECT hook_wrapper FROM settings WHERE id = 0", [], |r| r.get(0))?;
+        if let Some(w) = current.filter(|w| !w.is_empty() && *w != hook() && Path::new(w) != shim()) {
+            return Err(format!("Modrinth already has a wrapper hook ({w}), Guarden won't replace it").into());
         }
+        crate::shim_for(&data())?;
+        db.execute("UPDATE settings SET hook_wrapper = ?1 WHERE id = 0", [hook()])?;
+        let mut warn: Vec<String> = own_wrapper(&db)?.into_iter().map(|p| format!("instance {p} has its own wrapper hook: NOT protected")).collect();
+        warn.extend(crate::prepare(self)?);
+        Ok(warn)
     }
-    Ok(warn)
-}
 
-/// Clear the wrapper hook if it is still ours.
-// ponytail: ACEs and container profiles stay; revoke them once grants are recorded.
-pub fn restore() -> R<()> {
-    let db = open()?;
-    // also the unquoted value written by the first version, which Modrinth couldn't run
-    db.execute(
-        "UPDATE settings SET hook_wrapper = NULL WHERE id = 0 AND hook_wrapper IN (?1, ?2)",
-        [hook(), shim().to_string_lossy().into_owned()],
-    )?;
-    Ok(())
+    /// Clear the wrapper hook if it is still ours.
+    // ponytail: ACEs and container profiles stay; revoke them once grants are recorded.
+    fn restore(&self) -> R<()> {
+        let db = open()?;
+        // also the unquoted value written by the first version, which Modrinth couldn't run
+        db.execute(
+            "UPDATE settings SET hook_wrapper = NULL WHERE id = 0 AND hook_wrapper IN (?1, ?2)",
+            [hook(), shim().to_string_lossy().into_owned()],
+        )?;
+        Ok(())
+    }
 }

@@ -7,8 +7,12 @@
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
-  ; Hand Modrinth back its own launch, unless this is an update replacing the files.
+  ; Hand each launcher back its own launch, unless this is an update replacing the files.
+  ; Fails harmlessly for a launcher that isn't installed.
   ${If} $UpdateMode <> 1
     nsExec::Exec '"$INSTDIR\guarden.exe" restore modrinth'
+    nsExec::Exec '"$INSTDIR\guarden.exe" restore prism'
+    nsExec::Exec '"$INSTDIR\guarden.exe" restore curseforge'
+    nsExec::Exec '"$INSTDIR\guarden.exe" restore official'
   ${EndIf}
 !macroend
