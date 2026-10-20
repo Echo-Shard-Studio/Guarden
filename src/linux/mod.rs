@@ -21,6 +21,12 @@ use std::sync::Arc;
 /// Newest Landlock ABI we know; older kernels enforce what they support (best effort).
 const LANDLOCK: ABI = ABI::V9;
 
+/// Nothing needs admin here (see the top).
+pub const ELEVATES: bool = false;
+
+/// Mojang's java runtimes: `runtime/<component>/<this>/<component>`.
+pub const MOJANG_PLATFORM: &str = "linux";
+
 /// Exe names of a java (fake javas get these).
 pub const JAVAS: [&str; 1] = ["java"];
 /// The one launchers are pointed at.

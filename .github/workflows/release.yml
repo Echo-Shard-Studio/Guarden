@@ -3,9 +3,9 @@ name: Release
 # Publish a version:
 # 1. Bump `version` in app/src-tauri/Cargo.toml and push.
 # 2. On GitHub, draft a release with tag and name `v<version>` and write its notes. Don't publish it.
-# 3. Run this workflow (Actions > Release > Run workflow). It builds the installer on Windows, signs
-#    the update with the TAURI_SIGNING_PRIVATE_KEY secret, attests that this runner built it, and
-#    attaches everything to the draft.
+# 3. Run this workflow (Actions > Release > Run workflow). It builds the Windows installer and the
+#    Linux packages, signs the updates with the TAURI_SIGNING_PRIVATE_KEY secret, attests that these
+#    runners built them, and attaches everything to the draft.
 # 4. Publish the draft. Installed apps poll the latest release's latest.json.
 on: workflow_dispatch
 
@@ -15,16 +15,12 @@ permissions:
   attestations: write
 
 jobs:
-  windows:
-    runs-on: windows-latest
-    defaults:
-      run:
-        shell: bash
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-
       - name: Draft release
         id: v
         env:
@@ -43,6 +39,19 @@ jobs:
           fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
 
+  windows:
+    needs: check
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
       - name: Tests
         run: cargo test -p guarden
 
@@ -59,39 +68,104 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npx --yes @tauri-apps/cli@2 build
+        run: npx --yes @tauri-apps/cli@2 build --bundles nsis
 
       # Proof the setup was built here from this commit: `gh attestation verify <setup> -R <repo>`.
       - name: Build provenance
         id: attest
         uses: actions/attest@v4
         with:
-          subject-path: target/release/bundle/nsis/Guarden_${{ steps.v.outputs.version }}_x64-setup.exe
+          subject-path: target/release/bundle/nsis/Guarden_${{ env.VERSION }}_x64-setup.exe
 
       - name: Attach to the draft
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.v.outputs.version }}
           BUNDLE: ${{ steps.attest.outputs.bundle-path }}
         run: |
-          dir=target/release/bundle/nsis
-          setup="Guarden_${VERSION}_x64-setup.exe"
-          gh release view "v$VERSION" --json body -q .body > notes.txt
-          python - <<'PY'
+          setup="target/release/bundle/nsis/Guarden_${VERSION}_x64-setup.exe"
+          cp "$BUNDLE" "Guarden_${VERSION}_x64-setup.exe.sigstore.json"
+          gh release upload "v$VERSION" "$setup" "$setup.sig" "Guarden_${VERSION}_x64-setup.exe.sigstore.json" --clobber
+
+  linux:
+    needs: check
+    # The oldest supported Ubuntu: the shim then runs on older glibcs, and inside the launchers' Flatpaks.
+    runs-on: ubuntu-22.04
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Tauri's system libraries
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Tests
+        run: cargo test -p guarden
+
+      - name: CLI and shim, shipped next to the app (bundle.externalBin)
+        run: |
+          cargo build --release --bin guarden --bin guarden-shim
+          mkdir -p app/src-tauri/binaries
+          for b in guarden guarden-shim; do
+            cp "target/release/$b" "app/src-tauri/binaries/$b-x86_64-unknown-linux-gnu"
+          done
+
+      - name: Packages
+        working-directory: app/src-tauri
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npx --yes @tauri-apps/cli@2 build --bundles appimage,deb
+
+      - name: Build provenance
+        id: attest
+        uses: actions/attest@v4
+        with:
+          subject-path: |
+            target/release/bundle/appimage/Guarden_${{ env.VERSION }}_amd64.AppImage
+            target/release/bundle/deb/Guarden_${{ env.VERSION }}_amd64.deb
+
+      - name: Attach to the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          app="target/release/bundle/appimage/Guarden_${VERSION}_amd64.AppImage"
+          deb="target/release/bundle/deb/Guarden_${VERSION}_amd64.deb"
+          cp "$BUNDLE" "Guarden_${VERSION}_linux.sigstore.json"
+          gh release upload "v$VERSION" "$app" "$app.sig" "$deb" "$deb.sig" "Guarden_${VERSION}_linux.sigstore.json" --clobber
+
+  publish:
+    needs: [check, windows, linux]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+    steps:
+      - name: latest.json, for the apps' updater
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "v$VERSION" -R "$GITHUB_REPOSITORY" -p '*.sig'
+          gh release view "v$VERSION" -R "$GITHUB_REPOSITORY" --json body -q .body > notes.txt
+          python3 - <<'PY'
           import datetime, json, os
           v, repo = os.environ["VERSION"], os.environ["GITHUB_REPOSITORY"]
-          setup = f"Guarden_{v}_x64-setup.exe"
+          def platform(file):
+              return {"signature": open(f"{file}.sig").read(), "url": f"https://github.com/{repo}/releases/download/v{v}/{file}"}
           json.dump({
               "version": v,
               "notes": open("notes.txt", encoding="utf-8").read().strip(),
               "pub_date": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
-              "platforms": {"windows-x86_64": {
-                  "signature": open(f"target/release/bundle/nsis/{setup}.sig").read(),
-                  "url": f"https://github.com/{repo}/releases/download/v{v}/{setup}",
-              }},
+              "platforms": {
+                  "windows-x86_64": platform(f"Guarden_{v}_x64-setup.exe"),
+                  # The updater picks the entry of how it was installed, else the plain one.
+                  "linux-x86_64": platform(f"Guarden_{v}_amd64.AppImage"),
+                  "linux-x86_64-appimage": platform(f"Guarden_{v}_amd64.AppImage"),
+                  "linux-x86_64-deb": platform(f"Guarden_{v}_amd64.deb"),
+              },
           }, open("latest.json", "w"), indent=2)
           PY
-          cp "$BUNDLE" "$setup.sigstore.json"
           # Publishing creates the tag on the commit that was built.
-          gh release edit "v$VERSION" --target "$GITHUB_SHA"
-          gh release upload "v$VERSION" "$dir/$setup" "$dir/$setup.sig" latest.json "$setup.sigstore.json" --clobber
+          gh release edit "v$VERSION" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA"
+          gh release upload "v$VERSION" -R "$GITHUB_REPOSITORY" latest.json --clobber

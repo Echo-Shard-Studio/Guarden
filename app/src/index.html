@@ -153,6 +153,8 @@ button { font: inherit; color: inherit; }
   grid-row: span 2; width: 40px; height: 40px; display: grid; place-items: center; border-radius: var(--r);
   font-family: var(--font-pixel); font-weight: 600; font-size: 1rem; background: var(--accent-soft); color: var(--accent);
 }
+.mono.logo { background: color-mix(in srgb, var(--line) 45%, transparent); }
+.mono.logo img { width: 26px; height: 26px; }
 .tile.soon .mono { background: color-mix(in srgb, var(--line) 60%, transparent); color: var(--muted); }
 .tile .name { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tile .row2 { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); font-size: var(--step--1); }
@@ -296,6 +298,8 @@ const example = () => {
   return {
     diagnostic: false,
     version: '0.1.0',
+    os: 'windows',
+    logs: 'C:\\Users\\toi\\AppData\\Roaming\\Guarden\\logs',
     launchers: [
       { id: 'modrinth', name: 'Modrinth App', mono: 'Mo', supported: true, admin: true, on: true, running: false, instances: [
         { key: 'fabric', name: 'Fabric 26.3', version: 'Minecraft 26.3 · Fabric', state: 'ok', code: 0, container: 'Guarden.56e114b99b3511f6' },
@@ -356,6 +360,11 @@ const $ = id => document.getElementById(id);
 const esc = t => String(t ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const hex = c => '0x' + (c >>> 0).toString(16);
 const supported = () => s.launchers.filter(l => l.supported);
+// Shipped in launchers/; any other launcher gets its two letters.
+const LOGOS = ['modrinth', 'prism', 'curseforge', 'official'];
+const badge = l => LOGOS.includes(l.id)
+  ? `<span class="mono logo" aria-hidden="true"><img src="launchers/${l.id}.svg" alt=""></span>`
+  : `<span class="mono" aria-hidden="true">${esc(l.mono)}</span>`;
 const current = () => s.launchers.find(l => l.id === selected && l.supported) ?? supported()[0];
 const STATE = {
   ok: ['ok', 'Prête'],
@@ -415,7 +424,7 @@ function render() {
 
   // notes: one plain sentence and one action each
   const notes = [];
-  if (update) notes.push({ info: true, title: `Guarden ${update} est disponible`, text: 'La mise à jour s’installe en quelques secondes, Windows te demandera l’autorisation.', btn: 'Mettre à jour', act: 'update' });
+  if (update) notes.push({ info: true, title: `Guarden ${update} est disponible`, text: s.os === 'windows' ? 'La mise à jour s’installe en quelques secondes, Windows te demandera l’autorisation.' : 'La mise à jour s’installe en quelques secondes.', btn: 'Mettre à jour', act: 'update' });
   if (error) notes.push({ bad: true, title: 'Guarden n’arrive pas à lire l’état de tes launchers', text: error, btn: 'Réessayer', act: 'refresh' });
   for (const l of supported()) {
     if (l.running) notes.push({ title: `${l.name} est ouvert`, btn: 'Réessayer', act: 'refresh',
@@ -440,14 +449,14 @@ function render() {
 
   $('tiles').innerHTML = s.launchers.length ? s.launchers.map(l => l.supported ? `
     <div class="tile" role="button" tabindex="0" aria-pressed="${l.id === current()?.id}" data-select="${l.id}">
-      <span class="mono" aria-hidden="true">${esc(l.mono)}</span>
+      ${badge(l)}
       <span class="name">${esc(l.name)}</span>
       <span class="row2"><span>${l.instances.length} instance${l.instances.length > 1 ? 's' : ''}</span>
         <button class="switch" type="button" role="switch" aria-checked="${l.on}" aria-busy="${busy === l.id}" aria-label="Protéger ${esc(l.name)}" data-toggle="${l.id}">
           <span>${busy === l.id ? 'Un instant…' : l.on ? 'Protégé' : 'Non protégé'}</span><span class="track" aria-hidden="true"></span></button></span>
     </div>` : `
     <div class="tile soon">
-      <span class="mono" aria-hidden="true">${esc(l.mono)}</span>
+      ${badge(l)}
       <span class="name">${esc(l.name)}</span>
       <span class="row2"><span>${l.count != null ? `${l.count} instance${l.count > 1 ? 's' : ''}` : 'Détecté'}</span><span>Bientôt</span></span>
     </div>`).join('') : `<p class="empty">Aucun launcher trouvé sur ce PC.</p>`;
@@ -513,7 +522,7 @@ function why(name) {
     <details><summary>Détails techniques</summary>
 <pre id="tech">code de sortie ${esc(i?.code != null ? hex(i.code) : 'inconnu')}
 conteneur ${esc(i?.container ?? '?')}
-journaux : %APPDATA%\\Guarden\\logs</pre>
+journaux : ${esc(s.logs ?? '')}</pre>
       <button class="btn" type="button" id="copy" style="margin-top:10px">Copier</button></details>`, 'Détails du problème');
 }
 

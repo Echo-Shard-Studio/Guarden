@@ -25,6 +25,14 @@ pub fn root() -> PathBuf {
     sys::data_dir().join("Guarden")
 }
 
+/// The Guarden root, and the ones in Flatpak launchers' own data dirs (each with its shim copy,
+/// logs and `debug` flag: what the shim running in there sees as `root()`).
+pub fn roots() -> Vec<PathBuf> {
+    let flatpaks = std::fs::read_dir(sys::home().join(".var/app")).into_iter().flatten().flatten();
+    let flatpaks = flatpaks.map(|d| d.path().join("data").join("Guarden")).filter(|r| r.exists());
+    std::iter::once(root()).chain(flatpaks).collect()
+}
+
 /// The shim launchers run, in `<data>\Guarden` (no container can write there): `data` is
 /// `sys::data_dir()`, or a Flatpak launcher's own (see `launcher_data`). A copy of the one shipped
 /// next to the app, so a launcher never points into the install dir that updates replace.
@@ -61,9 +69,8 @@ pub fn update_shims(shipped: &Path, create: bool) -> std::io::Result<()> {
     let new = std::fs::read(shipped)?;
     let fakes = std::fs::read_dir(root().join("java")).into_iter().flatten().flatten();
     let fakes = fakes.flat_map(|d| sys::JAVAS.map(|n| d.path().join("bin").join(n)));
-    let flatpaks = std::fs::read_dir(sys::home().join(".var/app")).into_iter().flatten().flatten();
-    let flatpaks = flatpaks.map(|d| shim_in(&d.path().join("data")));
-    for dst in std::iter::once(installed_shim()).chain(flatpaks).chain(fakes) {
+    let shims = roots().into_iter().map(|r| r.join(installed_shim().file_name().unwrap_or_default()));
+    for dst in shims.chain(fakes) {
         match std::fs::read(&dst) {
             Ok(old) if old == new => {}
             Err(_) if !create || dst != installed_shim() => {}
@@ -223,9 +230,12 @@ pub struct Launch {
     pub code: Option<u32>,
 }
 
-/// Game launches in `logs\shim.log`, oldest first. Launcher probes (`Guarden.probe`) are left out.
+/// Game launches in each root's `logs\shim.log`, oldest first. Launcher probes (`Guarden.probe`) are left out.
 pub fn launches() -> Vec<Launch> {
-    parse_log(&std::fs::read_to_string(root().join("logs").join("shim.log")).unwrap_or_default())
+    let logs = roots().into_iter().map(|r| std::fs::read_to_string(r.join("logs").join("shim.log")).unwrap_or_default());
+    let mut v: Vec<Launch> = logs.flat_map(|l| parse_log(&l)).collect();
+    v.sort_by_key(|l| l.start);
+    v
 }
 
 /// Start lines are `[ts] Guarden.x <java> rw=...`, end lines `[ts] Guarden.x exited with 0x..`.

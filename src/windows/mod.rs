@@ -8,6 +8,12 @@ pub use sandbox::{allow_listing, has_localhost, prepare, run, run_elevated};
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 
+/// Some setup needs admin (Modrinth's localhost exemption): `run_elevated` asks for it.
+pub const ELEVATES: bool = true;
+
+/// Mojang's java runtimes: `runtime/<component>/<this>/<component>`.
+pub const MOJANG_PLATFORM: &str = "windows-x64";
+
 /// Exe names of a java (fake javas get these).
 pub const JAVAS: [&str; 2] = ["java.exe", "javaw.exe"];
 /// The one launchers are pointed at: no console window.

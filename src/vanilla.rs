@@ -1,6 +1,6 @@
 //! Official launcher: no wrapper hook, so protect = point each installation's `javaDir` at a fake java
 //! (see `fake_java`), restore = put the original back (kept in `<Guarden root>\vanilla.json`).
-//! Installations live in `%APPDATA%\.minecraft\launcher_profiles*.json`.
+//! Installations live in `.minecraft/launcher_profiles*.json` (`%APPDATA%`, `~` on Linux).
 //!
 //! An installation whose game dir is `.minecraft` itself can't be sandboxed: the game would get write
 //! access to launcher_profiles.json, whose `javaDir` the launcher runs outside any container. Those are
@@ -12,7 +12,8 @@ use std::path::{Path, PathBuf};
 pub struct Vanilla;
 
 pub fn dir() -> PathBuf {
-    crate::sys::data_dir().join(".minecraft")
+    let data = crate::sys::data_dir().join(".minecraft");
+    if data.exists() { data } else { crate::sys::home().join(".minecraft") }
 }
 
 /// Classic launcher, Microsoft Store launcher.
@@ -100,7 +101,7 @@ impl crate::Launcher for Vanilla {
         !files().is_empty()
     }
     fn is_running(&self) -> bool {
-        crate::sys::running(&["MinecraftLauncher.exe", "Minecraft.exe"])
+        crate::sys::running(&["MinecraftLauncher.exe", "Minecraft.exe", "minecraft-launcher"])
     }
 
     /// Most recently used installations first.
@@ -226,9 +227,9 @@ pub fn runtime_for(args: &[String]) -> R<PathBuf> {
     // The launcher's root (`.minecraft`, or another --workDir) from the version jar on the classpath.
     let root = after("-cp")
         .into_iter()
-        .flat_map(|cp| cp.split(';'))
+        .flat_map(std::env::split_paths)
         .find_map(|e| {
-            let versions = Path::new(e).parent()?.parent()?;
+            let versions = e.parent()?.parent()?;
             (versions.file_name()? == "versions").then(|| versions.parent().map(Path::to_path_buf)).flatten()
         })
         .unwrap_or_else(dir);
@@ -245,7 +246,7 @@ pub fn runtime_for(args: &[String]) -> R<PathBuf> {
     let store = crate::env_path("LOCALAPPDATA").unwrap_or_default().join(r"Packages\Microsoft.4297127D64EC6_8wekyb3d8bbwe\LocalCache\Local");
     [root.join("runtime"), store.join("runtime")]
         .into_iter()
-        .map(|r| r.join(&component).join("windows-x64").join(&component))
+        .map(|r| r.join(&component).join(crate::sys::MOJANG_PLATFORM).join(&component))
         .chain([root.join("java").join(&component)]) // CurseForge: `Install\java\<component>`
         .find(|h| h.join("bin").join(crate::sys::JAVA).exists())
         .ok_or_else(|| format!("Mojang's java runtime {component} isn't downloaded: launch this version once without Guarden").into())
@@ -265,11 +266,12 @@ mod tests {
         };
         v("1.20.1", r#"{"javaVersion":{"component":"java-runtime-gamma"}}"#);
         v("fabric-loader-0.16-1.20.1", r#"{"inheritsFrom":"1.20.1"}"#);
-        let home = t.join("runtime").join("java-runtime-gamma").join("windows-x64").join("java-runtime-gamma");
+        let home = t.join("runtime").join("java-runtime-gamma").join(crate::sys::MOJANG_PLATFORM).join("java-runtime-gamma");
         fs::create_dir_all(home.join("bin")).unwrap();
         fs::write(home.join("bin").join(crate::sys::JAVA), "").unwrap();
         let jar = t.join("versions").join("fabric-loader-0.16-1.20.1").join("fabric-loader-0.16-1.20.1.jar");
-        let args: Vec<String> = ["-cp", &format!("C:/lib/a.jar;{}", jar.display()), "M", "--version", "fabric-loader-0.16-1.20.1"].map(Into::into).into();
+        let cp = std::env::join_paths([Path::new("/lib/a.jar"), &jar]).unwrap().into_string().unwrap();
+        let args: Vec<String> = ["-cp", &cp, "M", "--version", "fabric-loader-0.16-1.20.1"].map(Into::into).into();
         assert_eq!(runtime_for(&args).unwrap(), home);
         assert_eq!(version_of(&t, "fabric-loader-0.16-1.20.1"), (Some("1.20.1".into()), Some("fabric".into())));
         assert_eq!(version_of(&t, "1.21.4"), (Some("1.21.4".into()), None));

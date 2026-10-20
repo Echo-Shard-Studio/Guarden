@@ -73,6 +73,9 @@ mod cmd {
         recent: Vec<Play>,
         diagnostic: bool,
         version: String,
+        /// "windows", "linux": what the texts talk about.
+        os: &'static str,
+        logs: String,
     }
 
     /// "Minecraft 1.20.1 · Forge"
@@ -127,7 +130,7 @@ mod cmd {
                 name: l.name(),
                 mono: mono(l.id()),
                 supported: true,
-                admin: l.localhost(),
+                admin: l.localhost() && sys::ELEVATES,
                 on: st.protected,
                 running: l.is_running(),
                 instances,
@@ -143,7 +146,14 @@ mod cmd {
             })
             .take(8)
             .collect();
-        Ok(State { launchers, recent, diagnostic: guarden::root().join("debug").exists(), version: app.package_info().version.to_string() })
+        Ok(State {
+            launchers,
+            recent,
+            diagnostic: guarden::root().join("debug").exists(),
+            version: app.package_info().version.to_string(),
+            os: std::env::consts::OS,
+            logs: guarden::root().join("logs").display().to_string(),
+        })
     }
 
     /// The newer version available, if any. Offline or no release yet: just None.
@@ -193,7 +203,7 @@ mod cmd {
         if !on {
             return l.restore().map_err(|e| e.to_string());
         }
-        if l.localhost() {
+        if l.localhost() && sys::ELEVATES {
             return elevated(&format!("protect {id}"));
         }
         guarden::update_shims(&exe("guarden-shim")?, true).map_err(|e| e.to_string())?;
@@ -217,10 +227,13 @@ mod cmd {
     }
 
     #[tauri::command]
+    /// The `debug` flag in every root: the shims in Flatpak launchers read their own.
     pub async fn set_diagnostic(on: bool) -> Result<(), String> {
-        let flag = guarden::root().join("debug");
-        let r = if on { std::fs::create_dir_all(guarden::root()).and_then(|_| std::fs::write(&flag, "")) } else { std::fs::remove_file(&flag) };
-        r.map_err(|e| e.to_string())
+        let set = |r: &std::path::Path| match on {
+            true => std::fs::create_dir_all(r).and_then(|_| std::fs::write(r.join("debug"), "")),
+            false => std::fs::remove_file(r.join("debug")).or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(e) }),
+        };
+        guarden::roots().iter().try_for_each(|r| set(r)).map_err(|e| e.to_string())
     }
 
     #[tauri::command]
