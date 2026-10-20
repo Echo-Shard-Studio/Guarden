@@ -1,0 +1,81 @@
+name: Release
+
+# Publish a version: bump `version` in app/src-tauri/Cargo.toml, push, then run this workflow
+# (Actions > Release > Run workflow). It builds the installer on Windows, signs the update with the
+# TAURI_SIGNING_PRIVATE_KEY secret and creates the GitHub release that installed apps poll.
+on:
+  workflow_dispatch:
+    inputs:
+      notes:
+        description: Notes de version (affichées sur la release)
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Version
+        id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v=$(grep -m1 '^version' app/src-tauri/Cargo.toml | cut -d'"' -f2)
+          if gh release view "v$v" >/dev/null 2>&1; then
+            echo "::error::v$v est déjà publiée : augmente la version dans app/src-tauri/Cargo.toml"
+            exit 1
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Tests
+        run: cargo test -p guarden
+
+      - name: CLI and shim, shipped next to the app (bundle.externalBin)
+        run: |
+          cargo build --release --bin guarden --bin guarden-shim
+          mkdir -p app/src-tauri/binaries
+          for b in guarden guarden-shim; do
+            cp "target/release/$b.exe" "app/src-tauri/binaries/$b-x86_64-pc-windows-msvc.exe"
+          done
+
+      - name: Installer
+        working-directory: app/src-tauri
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npx --yes @tauri-apps/cli@2 build
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.v.outputs.version }}
+          NOTES: ${{ inputs.notes }}
+        run: |
+          dir=target/release/bundle/nsis
+          setup="Guarden_${VERSION}_x64-setup.exe"
+          python - <<'PY'
+          import datetime, json, os
+          v, repo, notes = os.environ["VERSION"], os.environ["GITHUB_REPOSITORY"], os.environ["NOTES"]
+          setup = f"Guarden_{v}_x64-setup.exe"
+          json.dump({
+              "version": v,
+              "notes": notes,
+              "pub_date": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+              "platforms": {"windows-x86_64": {
+                  "signature": open(f"target/release/bundle/nsis/{setup}.sig").read(),
+                  "url": f"https://github.com/{repo}/releases/download/v{v}/{setup}",
+              }},
+          }, open("latest.json", "w"), indent=2)
+          PY
+          gh release create "v$VERSION" "$dir/$setup" "$dir/$setup.sig" latest.json \
+            --title "Guarden $VERSION" --notes "$NOTES" --latest --target "$GITHUB_SHA"
