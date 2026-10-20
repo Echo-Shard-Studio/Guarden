@@ -1,18 +1,18 @@
 name: Release
 
-# Publish a version: bump `version` in app/src-tauri/Cargo.toml, push, then run this workflow
-# (Actions > Release > Run workflow). It builds the installer on Windows, signs the update with the
-# TAURI_SIGNING_PRIVATE_KEY secret and creates the GitHub release that installed apps poll.
-on:
-  workflow_dispatch:
-    inputs:
-      notes:
-        description: Notes de version (affichées sur la release)
-        required: false
-        default: ""
+# Publish a version:
+# 1. Bump `version` in app/src-tauri/Cargo.toml and push.
+# 2. On GitHub, draft a release with tag and name `v<version>` and write its notes. Don't publish it.
+# 3. Run this workflow (Actions > Release > Run workflow). It builds the installer on Windows, signs
+#    the update with the TAURI_SIGNING_PRIVATE_KEY secret, attests that this runner built it, and
+#    attaches everything to the draft.
+# 4. Publish the draft. Installed apps poll the latest release's latest.json.
+on: workflow_dispatch
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   windows:
@@ -25,14 +25,20 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      - name: Version
+      - name: Draft release
         id: v
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           v=$(grep -m1 '^version' app/src-tauri/Cargo.toml | cut -d'"' -f2)
-          if gh release view "v$v" >/dev/null 2>&1; then
-            echo "::error::v$v est déjà publiée : augmente la version dans app/src-tauri/Cargo.toml"
+          draft=$(gh release view "v$v" --json isDraft -q .isDraft 2>/dev/null || true)
+          if [ "$draft" != true ]; then
+            echo "::error::Aucune release v$v en brouillon (version de app/src-tauri/Cargo.toml). Crée-la en draft, ou augmente la version si v$v est déjà publiée."
+            exit 1
+          fi
+          # A tag that already exists must be this commit, or the release would ship other code.
+          if sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/v$v" -q .sha 2>/dev/null) && [ "$sha" != "$GITHUB_SHA" ]; then
+            echo "::error::Le tag v$v existe déjà sur $sha, pas sur le commit construit ($GITHUB_SHA)."
             exit 1
           fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
@@ -55,21 +61,29 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npx --yes @tauri-apps/cli@2 build
 
-      - name: Release
+      # Proof the setup was built here from this commit: `gh attestation verify <setup> -R <repo>`.
+      - name: Build provenance
+        id: attest
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: target/release/bundle/nsis/Guarden_${{ steps.v.outputs.version }}_x64-setup.exe
+
+      - name: Attach to the draft
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.v.outputs.version }}
-          NOTES: ${{ inputs.notes }}
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
         run: |
           dir=target/release/bundle/nsis
           setup="Guarden_${VERSION}_x64-setup.exe"
+          gh release view "v$VERSION" --json body -q .body > notes.txt
           python - <<'PY'
           import datetime, json, os
-          v, repo, notes = os.environ["VERSION"], os.environ["GITHUB_REPOSITORY"], os.environ["NOTES"]
+          v, repo = os.environ["VERSION"], os.environ["GITHUB_REPOSITORY"]
           setup = f"Guarden_{v}_x64-setup.exe"
           json.dump({
               "version": v,
-              "notes": notes,
+              "notes": open("notes.txt", encoding="utf-8").read().strip(),
               "pub_date": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
               "platforms": {"windows-x86_64": {
                   "signature": open(f"target/release/bundle/nsis/{setup}.sig").read(),
@@ -77,5 +91,7 @@ jobs:
               }},
           }, open("latest.json", "w"), indent=2)
           PY
-          gh release create "v$VERSION" "$dir/$setup" "$dir/$setup.sig" latest.json \
-            --title "Guarden $VERSION" --notes "$NOTES" --latest --target "$GITHUB_SHA"
+          cp "$BUNDLE" "$setup.sigstore.json"
+          # Publishing creates the tag on the commit that was built.
+          gh release edit "v$VERSION" --target "$GITHUB_SHA"
+          gh release upload "v$VERSION" "$dir/$setup" "$dir/$setup.sig" latest.json "$setup.sigstore.json" --clobber
