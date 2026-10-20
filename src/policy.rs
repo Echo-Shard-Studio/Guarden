@@ -108,7 +108,7 @@ mod tests {
         assert_eq!(p.rw, vec![game.clone()]);
         assert_eq!(p.ro, vec![java.clone(), a.clone(), b.clone(), natives.clone()]);
         let anc = p.ancestors();
-        assert!(anc.contains(&libs) && anc.contains(&t) && anc.contains(&PathBuf::from("/")));
+        assert!(anc.contains(&libs) && anc.contains(&t) && anc.contains(&t.ancestors().last().unwrap().to_path_buf()));
         assert!(!anc.contains(&game) && !anc.contains(&a));
 
         let mut r = vec!["-Djna.tmpdir=X:/shared/jna".to_string(), "-Xmx1G".into()];
