@@ -1,0 +1,4 @@
+/target
+/dist
+/app/src-tauri/binaries
+/app/src-tauri/gen/schemas

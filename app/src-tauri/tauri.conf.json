@@ -1,0 +1,64 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Guarden",
+  "mainBinaryName": "guarden-app",
+  "identifier": "app.guarden",
+  "build": {
+    "frontendDist": "../src"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "Guarden",
+        "width": 1040,
+        "height": 760,
+        "minWidth": 400,
+        "minHeight": 520,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "createUpdaterArtifacts": true,
+    "icon": [
+      "icons/icon.png",
+      "icons/icon.ico"
+    ],
+    "externalBin": [
+      "binaries/guarden",
+      "binaries/guarden-shim"
+    ],
+    "publisher": "Guarden",
+    "shortDescription": "Isole tes instances Minecraft moddées",
+    "windows": {
+      "nsis": {
+        "installMode": "perMachine",
+        "installerHooks": "windows/hooks.nsh",
+        "languages": [
+          "French",
+          "English"
+        ],
+        "displayLanguageSelector": false
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQ5MDdBNzVFRDA5QTdFRTMKUldUamZwclFYcWNIMlRnQ1MwUmMzU05kczFqaEdIZzlLVGU3SDRaNlh1TkIzVlUwdm1DekRiczgK",
+      "endpoints": [
+        "https://github.com/Echo-Shard-Studio/Guarden/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}

@@ -1,0 +1,555 @@
+<!doctype html>
+<html lang="fr">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Guarden</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="fonts/fonts.css">
+<style>
+/* Layout: one calm column. A glass-cloche "stage" states protection at a glance, then launchers as
+   tiles with one switch each, the selected launcher's instances, and recent plays. Settings and
+   explanations open in a side drawer, so technical detail never sits on the main screen. */
+:root {
+  --bg: #E9EDE7;
+  --surface: #F6F8F4;
+  --ink: #17211B;
+  --muted: #59665D;
+  --line: #D2D9CF;
+  --line-strong: #B5C0B2;
+  --accent: #2E7A68;
+  --accent-ink: #F3FBF8;
+  --accent-soft: #D3E7DF;
+  --warn: #9E560B;
+  --warn-soft: #F2E1C8;
+  --danger: #A9342A;
+  --danger-soft: #F2D8D4;
+  --scrim: rgb(23 33 27 / 0.32);
+
+  --font-display: "Bricolage Grotesque", "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  --font-body: "Figtree", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-pixel: "Pixelify Sans", "Lucida Console", "Courier New", monospace;
+  --font-mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+
+  --step--1: 0.8125rem;
+  --step-0: 0.9375rem;
+  --step-1: 1.125rem;
+  --step-2: 1.5rem;
+  --step-3: clamp(1.75rem, 1.2rem + 2vw, 2.5rem);
+  --r: 4px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0F1512; --surface: #161E1A; --ink: #E3EAE5; --muted: #8E9B92; --line: #25302A; --line-strong: #37453D;
+    --accent: #5DBFA6; --accent-ink: #06140F; --accent-soft: #17302A;
+    --warn: #E3A04E; --warn-soft: #33250F; --danger: #EC7363; --danger-soft: #3A1A16; --scrim: rgb(0 0 0 / 0.5);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0F1512; --surface: #161E1A; --ink: #E3EAE5; --muted: #8E9B92; --line: #25302A; --line-strong: #37453D;
+  --accent: #5DBFA6; --accent-ink: #06140F; --accent-soft: #17302A;
+  --warn: #E3A04E; --warn-soft: #33250F; --danger: #EC7363; --danger-soft: #3A1A16; --scrim: rgb(0 0 0 / 0.5);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { min-height: 100%; }
+body {
+  background: var(--bg); color: var(--ink);
+  font: 400 var(--step-0)/1.5 var(--font-body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+}
+.app { max-width: 980px; margin: 0 auto; padding-block: 20px 48px; display: grid; gap: 40px; }
+h1, h2, h3 { font-family: var(--font-display); font-weight: 650; margin: 0; text-wrap: balance; letter-spacing: -0.01em; }
+h2 { font-size: var(--step-1); }
+p { margin: 0; }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---------- top bar ---------- */
+.bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.wordmark { font-family: var(--font-pixel); font-weight: 600; font-size: 1.375rem; letter-spacing: 0.06em; display: flex; align-items: center; gap: 10px; }
+.wordmark .pip { width: 14px; height: 14px; background: var(--accent); box-shadow: 4px 4px 0 var(--accent-soft); }
+
+/* ---------- buttons ---------- */
+.btn {
+  display: inline-flex; align-items: center; gap: 8px; cursor: pointer; white-space: nowrap;
+  font-weight: 600; font-size: var(--step--1); line-height: 1; padding: 10px 14px;
+  border-radius: var(--r); border: 1px solid var(--line-strong); background: var(--surface);
+  box-shadow: 0 2px 0 var(--line-strong); transition: transform .08s, box-shadow .08s;
+}
+.btn:active { transform: translateY(2px); box-shadow: 0 0 0 var(--line-strong); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); box-shadow: 0 2px 0 color-mix(in srgb, var(--accent) 60%, #000); }
+.btn.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); box-shadow: 0 2px 0 color-mix(in srgb, var(--danger) 35%, var(--line)); }
+.btn.quiet { border-color: transparent; background: transparent; box-shadow: none; padding-inline: 8px; color: var(--muted); }
+.btn.quiet:hover { color: var(--ink); background: color-mix(in srgb, var(--line) 50%, transparent); }
+.btn svg { width: 16px; height: 16px; flex: none; }
+
+/* ---------- stage ---------- */
+.stage {
+  display: grid; grid-template-columns: minmax(0, 260px) minmax(0, 1fr); align-items: center; gap: 32px;
+  padding: 28px 32px; background: var(--surface); border: 1px solid var(--line); border-radius: 6px;
+}
+.stage h1 { font-size: var(--step-3); line-height: 1.1; }
+.stage .lede { color: var(--muted); max-width: 46ch; margin-top: 10px; }
+.facts { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-top: 20px; font-size: var(--step--1); color: var(--muted); }
+.facts b { font-family: var(--font-pixel); font-weight: 500; font-size: var(--step-1); color: var(--ink); margin-right: 6px; font-variant-numeric: tabular-nums; }
+
+.scene { height: 220px; perspective: 900px; display: grid; place-items: center; position: relative; }
+.ground { position: absolute; bottom: 22px; width: 150px; height: 26px; border-radius: 50%; background: radial-gradient(closest-side, color-mix(in srgb, var(--accent) 35%, transparent), transparent); transition: background .5s; }
+.iso { position: relative; width: 1px; height: 1px; transform-style: preserve-3d; transform: rotateX(-28deg) rotateY(-42deg); animation: bob 5s ease-in-out infinite; }
+.cube { position: absolute; width: var(--s); height: var(--s); left: calc(var(--s) / -2); top: calc(var(--s) / -2); transform-style: preserve-3d; }
+.f { position: absolute; inset: 0; }
+.front  { transform: translateZ(calc(var(--s) / 2)); }
+.back   { transform: rotateY(180deg) translateZ(calc(var(--s) / 2)); }
+.right  { transform: rotateY(90deg) translateZ(calc(var(--s) / 2)); }
+.left   { transform: rotateY(-90deg) translateZ(calc(var(--s) / 2)); }
+.top    { transform: rotateX(90deg) translateZ(calc(var(--s) / 2)); }
+.bottom { transform: rotateX(-90deg) translateZ(calc(var(--s) / 2)); }
+.block { --s: 82px; }
+.block .f { background: url(textures/side.png) 0 0 / 100% 100%; image-rendering: pixelated; }
+.block .top { background-image: url(textures/top.png); }
+.block .right::after, .block .front::after { content: ""; position: absolute; inset: 0; background: #000; opacity: .14; }
+.block .right::after { opacity: .28; }
+.glass { --s: 148px; transition: opacity .5s, transform .6s cubic-bezier(.3,1.4,.5,1); }
+.glass .f {
+  border: 1.5px solid color-mix(in srgb, var(--accent) 70%, transparent);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 22%, transparent), color-mix(in srgb, var(--accent) 6%, transparent) 60%);
+}
+.glass .top { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.stage[data-on="false"] .glass { opacity: 0; transform: scale(1.35); }
+.stage[data-on="false"] .ground { background: radial-gradient(closest-side, color-mix(in srgb, var(--warn) 40%, transparent), transparent); }
+@keyframes bob { 50% { transform: rotateX(-28deg) rotateY(-42deg) translateY(-8px); } }
+
+/* ---------- notes (alerts) ---------- */
+.notes { display: grid; gap: 10px; }
+.notes:empty { display: none; }
+.note {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 14px;
+  padding: 12px 12px 12px 14px; border-radius: var(--r); background: var(--warn-soft);
+}
+.note .glyph { width: 12px; height: 12px; background: var(--warn); box-shadow: 0 0 0 4px color-mix(in srgb, var(--warn) 25%, transparent); }
+.note strong { font-weight: 600; }
+.note p { color: var(--muted); font-size: var(--step--1); }
+
+/* ---------- section heads ---------- */
+.section { display: grid; gap: 14px; }
+.head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.head .sub { color: var(--muted); font-size: var(--step--1); }
+
+/* ---------- launcher tiles ---------- */
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
+.tile {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto auto; gap: 4px 12px; align-items: center;
+  padding: 14px; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; text-align: left; cursor: pointer;
+}
+.tile[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.tile.soon { cursor: default; background: transparent; border-style: dashed; }
+.mono {
+  grid-row: span 2; width: 40px; height: 40px; display: grid; place-items: center; border-radius: var(--r);
+  font-family: var(--font-pixel); font-weight: 600; font-size: 1rem; background: var(--accent-soft); color: var(--accent);
+}
+.tile.soon .mono { background: color-mix(in srgb, var(--line) 60%, transparent); color: var(--muted); }
+.tile .name { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tile .row2 { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); font-size: var(--step--1); }
+.tile .row2 > span:first-child { white-space: nowrap; }
+
+/* blocky switch, like a lever */
+.switch { display: inline-flex; align-items: center; gap: 8px; border: 0; background: none; padding: 0; cursor: pointer; font-size: var(--step--1); font-weight: 600; color: var(--muted); }
+.switch .track { width: 40px; height: 22px; border-radius: 3px; background: var(--line-strong); position: relative; transition: background .2s; }
+.switch .track::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 2px; background: var(--surface); box-shadow: 0 1px 0 rgb(0 0 0 / .15); transition: transform .2s; }
+.switch[aria-checked="true"] { color: var(--accent); }
+.switch[aria-checked="true"] .track { background: var(--accent); }
+.switch[aria-checked="true"] .track::after { transform: translateX(18px); }
+.switch[aria-busy="true"] { opacity: .55; cursor: progress; }
+.note.bad { background: var(--danger-soft); }
+.note.info { background: var(--accent-soft); }
+.note.info .glyph { background: var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 25%, transparent); }
+.version { color: var(--muted); font-size: var(--step--1); }
+.note.bad .glyph { background: var(--danger); box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 25%, transparent); }
+.empty { padding: 20px; color: var(--muted); }
+
+/* ---------- instances ---------- */
+.list { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; }
+.item { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 14px 16px; }
+.item + .item { border-top: 1px solid var(--line); }
+.item .what { flex: 1 1 220px; min-width: 0; }
+.item .what b { font-weight: 600; }
+.item .what span { display: block; color: var(--muted); font-size: var(--step--1); }
+.state { display: inline-flex; align-items: center; gap: 8px; font-size: var(--step--1); font-weight: 600; min-width: 11em; }
+.state i { width: 8px; height: 8px; flex: none; }
+.state.ok { color: var(--accent); } .state.ok i { background: var(--accent); }
+.state.warn { color: var(--warn); } .state.warn i { background: var(--warn); }
+.state.bad { color: var(--danger); } .state.bad i { background: var(--danger); }
+.item .act { margin-left: auto; min-width: 7.5em; display: flex; justify-content: flex-end; }
+
+/* ---------- recent ---------- */
+.recent { display: grid; gap: 2px; }
+.play { display: grid; grid-template-columns: 7.5em minmax(0, 1fr); gap: 12px; padding: 8px 0; align-items: baseline; }
+.play time { color: var(--muted); font-size: var(--step--1); font-variant-numeric: tabular-nums; }
+.play.bad p { color: var(--danger); }
+.play .btn { margin-left: 6px; padding-block: 4px; }
+
+.foot { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; color: var(--muted); font-size: var(--step--1); border-top: 1px dashed var(--line-strong); padding-top: 16px; }
+.foot .demo { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* ---------- drawer ---------- */
+.scrim { position: fixed; inset: 0; background: var(--scrim); z-index: 20; }
+.drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; width: min(420px, 100%); z-index: 21; overflow-y: auto;
+  background: var(--surface); border-left: 1px solid var(--line);
+  padding: calc(20px + env(safe-area-inset-top, 0px)) max(20px, env(safe-area-inset-right, 0px)) calc(20px + env(safe-area-inset-bottom, 0px)) 20px;
+  display: grid; align-content: start; gap: 20px; animation: slide .22s ease-out;
+}
+@keyframes slide { from { transform: translateX(24px); opacity: 0; } }
+.drawer .top-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.setting { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 16px; align-items: center; padding-block: 14px; border-top: 1px solid var(--line); }
+.setting p { color: var(--muted); font-size: var(--step--1); grid-column: 1; }
+.setting > :last-child { grid-row: 1 / span 2; grid-column: 2; }
+.confirm { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 12px; border-radius: var(--r); background: var(--danger-soft); font-size: var(--step--1); }
+details { border-top: 1px solid var(--line); padding-top: 14px; }
+summary { cursor: pointer; font-weight: 600; font-size: var(--step--1); color: var(--muted); }
+pre { margin: 10px 0 0; padding: 12px; border-radius: var(--r); background: var(--bg); font: 12px/1.6 var(--font-mono); white-space: pre-wrap; word-break: break-all; color: var(--muted); }
+
+/* ---------- toast ---------- */
+.toast {
+  position: fixed; left: 50%; bottom: calc(20px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); z-index: 30;
+  max-width: calc(100% - 32px); padding: 10px 16px; border-radius: var(--r); background: var(--ink); color: var(--bg); font-size: var(--step--1); font-weight: 500;
+}
+
+@media (max-width: 640px) {
+  .app { gap: 32px; padding-top: 12px; }
+  .stage { grid-template-columns: 1fr; padding: 20px; gap: 8px; text-align: left; }
+  .scene { height: 180px; }
+  .note { grid-template-columns: auto minmax(0, 1fr); }
+  .note .btn { grid-column: 2; justify-self: start; }
+  .item .act { margin-left: 0; justify-content: flex-start; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .iso { animation: none; }
+  .glass, .drawer, .btn, .switch .track::after { transition: none; animation: none; }
+}
+</style>
+
+<div class="app">
+  <header class="bar">
+    <div class="wordmark"><span class="pip" aria-hidden="true"></span>GUARDEN</div>
+    <button class="btn quiet" id="open-settings" type="button">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M2 4h7M12 4h2M2 12h2M7 12h7"/><rect x="9" y="2.5" width="3" height="3"/><rect x="4" y="10.5" width="3" height="3"/></svg>
+      Réglages
+    </button>
+  </header>
+
+  <section class="stage" id="stage" data-on="true" aria-live="polite">
+    <div class="scene" aria-hidden="true">
+      <div class="ground"></div>
+      <div class="iso">
+        <div class="cube block"><i class="f top"></i><i class="f front"></i><i class="f right"></i><i class="f left"></i><i class="f back"></i></div>
+        <div class="cube glass"><i class="f top"></i><i class="f front"></i><i class="f right"></i><i class="f left"></i><i class="f back"></i></div>
+      </div>
+    </div>
+    <div>
+      <h1 id="headline"></h1>
+      <p class="lede" id="lede"></p>
+      <div class="facts" id="facts"></div>
+    </div>
+  </section>
+
+  <div class="notes" id="notes"></div>
+
+  <section class="section">
+    <div class="head"><h2>Tes launchers</h2><span class="sub">Un interrupteur par launcher, Guarden s’occupe du reste.</span></div>
+    <div class="tiles" id="tiles"></div>
+  </section>
+
+  <section class="section" id="instances-section">
+    <div class="head"><h2 id="inst-title"></h2><span class="sub" id="inst-sub"></span></div>
+    <div class="list" id="instances"></div>
+  </section>
+
+  <section class="section" id="recent-section">
+    <div class="head"><h2>Récemment</h2></div>
+    <div class="recent" id="recent"></div>
+  </section>
+
+  <footer class="foot" id="demo">
+    <span>Aperçu avec des données d’exemple.</span>
+    <span class="demo">
+      <button class="btn quiet" type="button" id="demo-running">Simuler : launcher ouvert</button>
+      <button class="btn quiet" type="button" id="demo-reset">Réinitialiser</button>
+    </span>
+  </footer>
+</div>
+
+<div id="layer"></div>
+
+<script>
+// Data comes from the Tauri app (window.__TAURI__) or, in a plain browser, from the example below.
+const tauri = window.__TAURI__?.core;
+const H = 3600;
+const example = () => {
+  const now = Math.floor(Date.now() / 1000);
+  return {
+    diagnostic: false,
+    version: '0.1.0',
+    launchers: [
+      { id: 'modrinth', name: 'Modrinth App', mono: 'Mo', supported: true, on: true, running: false, instances: [
+        { name: 'Fabric 26.3', version: 'Minecraft 26.3 · Fabric', state: 'ok', code: 0, container: 'Guarden.56e114b99b3511f6' },
+        { name: 'Vanilla 1.21.4', version: 'Minecraft 1.21.4', state: 'ok', code: 0, container: 'Guarden.7d1e0b9a55c2f318' },
+        { name: 'Create 1.20.1', version: 'Minecraft 1.20.1 · Forge', state: 'incomplete', code: null, container: 'Guarden.0b1c2d3e4f506172' },
+        { name: 'Vanilla 1.8.9', version: 'Minecraft 1.8.9', state: 'failed', code: 1, container: 'Guarden.a3f09c21d4e8b7f0' },
+      ] },
+      { id: 'prism', name: 'Prism Launcher', mono: 'Pr', supported: false, instances: [], count: 2 },
+      { id: 'official', name: 'Launcher officiel', mono: 'Mc', supported: false, instances: [], count: null },
+    ],
+    recent: [
+      { ts: now - 1 * H, name: 'Fabric 26.3', minutes: 42, code: 0 },
+      { ts: now - 3 * H, name: 'Vanilla 1.8.9', minutes: 0, code: 1 },
+      { ts: now - 26 * H, name: 'Vanilla 1.21.4', minutes: 72, code: 0 },
+      { ts: now - 29 * H, name: 'Fabric 26.3', minutes: 18, code: 0 },
+    ],
+  };
+};
+
+// The example backend mimics the real commands, so the preview behaves like the app.
+const fake = {
+  data: example(),
+  async get_state() { return structuredClone(this.data); },
+  async set_protection({ id, on }) {
+    const l = this.data.launchers.find(x => x.id === id);
+    if (l.running) throw 'running';
+    l.on = on;
+  },
+  async finish_setup({ id }) { for (const i of this.data.launchers.find(x => x.id === id).instances) if (i.state === 'incomplete') i.state = 'ok'; },
+  async set_diagnostic({ on }) { this.data.diagnostic = on; },
+  async open_folder() {},
+  async uninstall() { for (const l of this.data.launchers) l.on = false; },
+  async check_update() { return '0.2.0'; },
+  async install_update() { throw 'Aperçu : la mise à jour ne s’installe que dans l’app.'; },
+};
+const call = (cmd, args = {}) => tauri ? tauri.invoke(cmd, args) : fake[cmd](args);
+
+let s = null;           // last state from the backend
+let selected = null;    // launcher shown in the instances section
+let busy = null;        // launcher id whose switch is working
+let confirmUninstall = false;
+let error = null;       // a backend error to show as a note
+let update = null;      // newer version available, if any
+
+const $ = id => document.getElementById(id);
+const esc = t => String(t ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const hex = c => '0x' + (c >>> 0).toString(16);
+const supported = () => s.launchers.filter(l => l.supported);
+const current = () => s.launchers.find(l => l.id === selected && l.supported) ?? supported()[0];
+const STATE = {
+  ok: ['ok', 'Prête'],
+  incomplete: ['warn', 'Configuration incomplète'],
+  failed: ['bad', 'N’a pas démarré'],
+  off: ['warn', 'Non protégée'],
+};
+
+function when(ts) {
+  const d = new Date(ts * 1000), now = new Date();
+  const hm = d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+  const day = x => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((day(now) - day(d)) / 864e5);
+  return diff === 0 ? `Aujourd’hui ${hm}` : diff === 1 ? `Hier ${hm}` : `${d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })} ${hm}`;
+}
+function ago(ts) {
+  const m = Math.max(1, Math.round((Date.now() / 1000 - ts) / 60));
+  return m < 60 ? `${m} min` : m < 1440 ? `${Math.round(m / 60)} h` : `${Math.round(m / 1440)} j`;
+}
+const duration = m => m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, '0')}`;
+function playText(p) {
+  if (p.code == null) return p.minutes == null ? `${p.name} · en cours` : `${p.name} · ${duration(p.minutes)} de jeu`;
+  if (p.code === 0) return `${p.name} · ${duration(Math.max(1, p.minutes ?? 0))} de jeu`;
+  return (p.minutes ?? 0) < 1 ? `${p.name} n’a pas démarré` : `${p.name} s’est arrêté sur une erreur`;
+}
+
+let toastTimer;
+function toast(msg) {
+  let t = document.querySelector('.toast');
+  if (!t) { t = document.createElement('div'); t.className = 'toast'; t.setAttribute('role', 'status'); document.body.append(t); }
+  t.textContent = msg; t.hidden = false;
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.hidden = true; }, 3200);
+}
+
+async function refresh() {
+  try { s = await call('get_state'); error = null; }
+  catch (e) { error = String(e); s ??= { launchers: [], recent: [], diagnostic: false }; }
+  render();
+}
+
+function render() {
+  const on = supported().filter(l => l.on);
+  const sheltered = on.reduce((n, l) => n + l.instances.length, 0);
+  $('stage').dataset.on = on.length > 0;
+  $('headline').textContent = on.length ? 'Tes parties sont à l’abri.' : 'Tes parties ne sont pas protégées.';
+  $('lede').textContent = on.length
+    ? 'Chaque instance joue dans sa propre bulle : un mod piégé ne peut pas toucher au reste de ton PC.'
+    : supported().length ? 'Active l’interrupteur d’un launcher ci-dessous. Tu continues à jouer exactement comme avant.'
+    : 'Guarden n’a trouvé aucun launcher qu’il sait protéger pour l’instant.';
+  const last = s.recent[0];
+  $('facts').innerHTML = on.length
+    ? `<span><b>${on.length}</b>launcher${on.length > 1 ? 's' : ''} protégé${on.length > 1 ? 's' : ''}</span><span><b>${sheltered}</b>instance${sheltered > 1 ? 's' : ''} à l’abri</span>`
+      + (last ? `<span><b>${ago(last.ts)}</b>depuis ta dernière partie</span>` : '')
+    : '';
+
+  // notes: one plain sentence and one action each
+  const notes = [];
+  if (update) notes.push({ info: true, title: `Guarden ${update} est disponible`, text: 'La mise à jour s’installe en quelques secondes, Windows te demandera l’autorisation.', btn: 'Mettre à jour', act: 'update' });
+  if (error) notes.push({ bad: true, title: 'Guarden n’arrive pas à lire l’état de tes launchers', text: error, btn: 'Réessayer', act: 'refresh' });
+  for (const l of supported()) {
+    if (l.running) notes.push({ title: `${l.name} est ouvert`, text: 'Ferme-le afin que Guarden s’exécute correctement.', btn: 'Réessayer', act: 'refresh' });
+    const todo = l.on ? l.instances.filter(i => i.state === 'incomplete') : [];
+    if (todo.length) notes.push({
+      title: todo.length === 1 ? `Configuration incomplète pour ${todo[0].name}` : `Configuration incomplète pour ${todo.length} instances`,
+      text: 'Les logs ne pourront pas s’afficher dans le launcher.', btn: 'Terminer', act: `finish:${l.id}` });
+  }
+  $('notes').innerHTML = notes.map(n => `
+    <div class="note${n.bad ? ' bad' : n.info ? ' info' : ''}"><span class="glyph" aria-hidden="true"></span>
+      <div><strong>${esc(n.title)}</strong><p>${esc(n.text)}</p></div>
+      <button class="btn" type="button" data-act="${esc(n.act)}">${esc(n.btn)}</button></div>`).join('');
+
+  $('tiles').innerHTML = s.launchers.length ? s.launchers.map(l => l.supported ? `
+    <div class="tile" role="button" tabindex="0" aria-pressed="${l.id === current()?.id}" data-select="${l.id}">
+      <span class="mono" aria-hidden="true">${esc(l.mono)}</span>
+      <span class="name">${esc(l.name)}</span>
+      <span class="row2"><span>${l.instances.length} instance${l.instances.length > 1 ? 's' : ''}</span>
+        <button class="switch" type="button" role="switch" aria-checked="${l.on}" aria-busy="${busy === l.id}" aria-label="Protéger ${esc(l.name)}" data-toggle="${l.id}">
+          <span>${busy === l.id ? 'Un instant…' : l.on ? 'Protégé' : 'Non protégé'}</span><span class="track" aria-hidden="true"></span></button></span>
+    </div>` : `
+    <div class="tile soon">
+      <span class="mono" aria-hidden="true">${esc(l.mono)}</span>
+      <span class="name">${esc(l.name)}</span>
+      <span class="row2"><span>${l.count != null ? `${l.count} instance${l.count > 1 ? 's' : ''}` : 'Détecté'}</span><span>Bientôt</span></span>
+    </div>`).join('') : `<p class="empty">Aucun launcher trouvé sur ce PC.</p>`;
+
+  const l = current();
+  $('instances-section').hidden = !l;
+  if (l) {
+    $('inst-title').textContent = `Instances · ${l.name}`;
+    $('inst-sub').textContent = l.on ? 'Chacune dans sa bulle.' : 'Pas encore protégées.';
+    $('instances').innerHTML = l.instances.length ? l.instances.map(i => {
+      const [cls, label] = STATE[l.on ? i.state : 'off'];
+      const act = !l.on ? '' : i.state === 'incomplete'
+        ? `<button class="btn" type="button" data-act="finish:${l.id}">Terminer</button>`
+        : i.state === 'failed' ? `<button class="btn quiet" type="button" data-why="${esc(i.name)}">Voir pourquoi</button>` : '';
+      return `<div class="item"><div class="what"><b>${esc(i.name)}</b><span>${esc(i.version)}</span></div>
+        <span class="state ${cls}"><i aria-hidden="true"></i>${label}</span><span class="act">${act}</span></div>`;
+    }).join('') : `<p class="empty">Aucune instance pour l’instant. Crée-en une dans ${esc(l.name)}.</p>`;
+  }
+
+  $('recent-section').hidden = !s.recent.length;
+  $('recent').innerHTML = s.recent.map(p => `
+    <div class="play${p.code ? ' bad' : ''}"><time>${esc(when(p.ts))}</time>
+      <p>${esc(playText(p))}${p.code ? ` <button class="btn quiet" type="button" data-why="${esc(p.name)}">Voir pourquoi</button>` : ''}</p></div>`).join('');
+
+  $('demo').hidden = !!tauri;
+}
+
+// ---------- drawers ----------
+function closeLayer() { $('layer').innerHTML = ''; confirmUninstall = false; }
+function drawer(html, label) {
+  $('layer').innerHTML = `<div class="scrim" data-close></div><aside class="drawer" role="dialog" aria-modal="true" aria-label="${label}">${html}</aside>`;
+  $('layer').querySelector('.drawer button, .drawer summary')?.focus();
+}
+function settings() {
+  drawer(`
+    <div class="top-row"><h2>Réglages</h2><button class="btn quiet" type="button" data-close>Fermer</button></div>
+    <div>
+      <div class="setting"><strong>Mode diagnostic</strong>
+        <p>Garde une trace détaillée de chaque lancement, utile si un jeu refuse de démarrer. Le jeu n’envoie plus ses logs au launcher tant qu’il est actif.</p>
+        <button class="switch" type="button" role="switch" id="diag" aria-checked="${s.diagnostic}" aria-label="Mode diagnostic"><span class="track" aria-hidden="true"></span></button></div>
+      <div class="setting"><strong>Dossier de Guarden</strong>
+        <p>Les journaux et la configuration de Guarden.</p>
+        <button class="btn" type="button" id="open-folder">Ouvrir</button></div>
+      <div class="setting"><strong>Désinstaller Guarden</strong>
+        <p>Retire la protection de tous les launchers. Tes instances ne sont pas touchées.</p>
+        <button class="btn danger" type="button" id="uninstall">Retirer</button>
+        ${confirmUninstall ? `<div class="confirm">Tes launchers reviendront à leur état d’origine.
+          <button class="btn danger" type="button" id="confirm-uninstall">Confirmer</button>
+          <button class="btn quiet" type="button" id="cancel-uninstall">Annuler</button></div>` : ''}
+      </div>
+    </div>
+    <p class="version">Guarden ${esc(s.version ?? '')}</p>`, 'Réglages');
+}
+function why(name) {
+  const i = s.launchers.flatMap(l => l.instances).find(x => x.name === name);
+  drawer(`
+    <div class="top-row"><h2>${esc(name)} n’a pas démarré</h2><button class="btn quiet" type="button" data-close>Fermer</button></div>
+    <p>Le jeu s’est arrêté juste après son lancement. Le plus souvent, il cherche un fichier en dehors de sa bulle et Guarden le lui refuse.</p>
+    <p>Réessaie depuis le launcher. Si ça recommence, active le mode diagnostic dans les réglages, relance le jeu et envoie le journal au support.</p>
+    <details><summary>Détails techniques</summary>
+<pre id="tech">code de sortie ${esc(i?.code != null ? hex(i.code) : 'inconnu')}
+conteneur ${esc(i?.container ?? '?')}
+journaux : %APPDATA%\\Guarden\\logs</pre>
+      <button class="btn" type="button" id="copy" style="margin-top:10px">Copier</button></details>`, 'Détails du problème');
+}
+
+// ---------- actions ----------
+async function toggle(id) {
+  const l = s.launchers.find(x => x.id === id);
+  if (busy) return;
+  busy = id; render();
+  if (!l.on) toast('Windows va te demander l’autorisation.');
+  try {
+    await call('set_protection', { id, on: !l.on });
+    toast(l.on ? `Protection retirée de ${l.name}.` : `${l.name} est protégé.`);
+  } catch (e) {
+    if (e === 'running') l.running = true;
+    else toast(e === 'cancelled' ? 'Autorisation refusée, rien n’a changé.' : String(e));
+  }
+  busy = null;
+  await refresh();
+}
+async function act(name, args, ok) {
+  try { await call(name, args); if (ok) toast(ok); }
+  catch (e) { if (e === 'running') toast('Ferme le launcher d’abord.'); else toast(e === 'cancelled' ? 'Autorisation refusée, rien n’a changé.' : String(e)); }
+  await refresh();
+}
+
+document.addEventListener('click', e => {
+  const t = e.target.closest('button, [data-select], [data-close]');
+  if (!t) return;
+  if (t.dataset.close !== undefined) return closeLayer();
+  if (t.dataset.toggle) { e.stopPropagation(); return toggle(t.dataset.toggle); }
+  if (t.dataset.select) { selected = t.dataset.select; return render(); }
+  if (t.dataset.act) {
+    const [kind, id] = t.dataset.act.split(':');
+    if (kind === 'refresh') return refresh();
+    if (kind === 'update') { toast('Téléchargement de la mise à jour…'); return act('install_update', {}); }
+    if (kind === 'finish') { toast('Windows va te demander l’autorisation.'); return act('finish_setup', { id }, 'Configuration terminée.'); }
+  }
+  if (t.dataset.why) return why(t.dataset.why);
+  switch (t.id) {
+    case 'open-settings': return settings();
+    case 'diag': return act('set_diagnostic', { on: !s.diagnostic }).then(settings);
+    case 'open-folder': return act('open_folder', {});
+    case 'uninstall': confirmUninstall = true; return settings();
+    case 'cancel-uninstall': confirmUninstall = false; return settings();
+    case 'confirm-uninstall': closeLayer(); return act('uninstall', {}, 'Protection retirée de tous les launchers.');
+    case 'copy': {
+      const text = $('tech').textContent;
+      navigator.clipboard?.writeText(text).then(() => toast('Copié'), () => toast('Sélectionne le texte pour le copier'));
+      return;
+    }
+    case 'demo-running': fake.data.launchers[0].running = true; return refresh();
+    case 'demo-reset': fake.data = example(); closeLayer(); return refresh();
+  }
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeLayer();
+  if ((e.key === 'Enter' || e.key === ' ') && e.target.dataset?.select) { e.preventDefault(); selected = e.target.dataset.select; render(); }
+});
+// The launcher may be closed or a game played while Guarden sits in the background.
+window.addEventListener('focus', refresh);
+setInterval(() => { if (!document.hidden && !busy) refresh(); }, 15000);
+
+refresh();
+call('check_update').then(v => { update = v; render(); }, () => {});
+</script>
