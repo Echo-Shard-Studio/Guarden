@@ -9,7 +9,7 @@ members = ["app/src-tauri"]
 [dependencies]
 serde_json = { version = "1", features = ["preserve_order"] } # launcher_profiles.json, Prism's mmc-pack.json; keeps the launcher's key order
 
-rusqlite = { version = "0.40.2", features = ["bundled"] } # Modrinth keeps its settings in SQLite
+rusqlite = { version = "0.41.0", features = ["bundled"] } # Modrinth keeps its settings in SQLite
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62.2", features = [
